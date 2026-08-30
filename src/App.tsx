@@ -16,6 +16,7 @@ type TiltPermission = 'unknown' | 'unsupported' | 'granted' | 'denied'
 const KEY_DECKS = 'guessup:decks:v1'
 const KEY_SETTINGS = 'guessup:settings:v1'
 const KEY_BEST = 'guessup:best:v1'
+const KEY_HISTORY = 'guessup:history:v1'
 
 const DEFAULT_SETTINGS: Settings = { seconds: 60, sound: true, tilt: true }
 
@@ -149,12 +150,50 @@ function shuffle<T>(items: T[]): T[] {
   return copy
 }
 
+function getCooldownLimit(totalCards: number): number {
+  if (totalCards > 50) {
+    return Math.min(50, Math.max(1, totalCards - 5))
+  }
+  return Math.min(25, Math.max(1, totalCards - 5))
+}
+
+function buildQueue(words: string[], deckId: string): string[] {
+  const historyMap = load<Record<string, string[]>>(KEY_HISTORY, {})
+  const rawHistory = historyMap[deckId] ?? []
+  const k = getCooldownLimit(words.length)
+  const recentList = rawHistory.slice(-k)
+  const recentSet = new Set(recentList)
+
+  // Split words into available (not recently seen) vs cooling (in cooldown)
+  const available = words.filter((w) => !recentSet.has(w))
+  // For cooling words, maintain oldest-first order
+  const cooling = recentList.filter((w) => words.includes(w))
+
+  const shuffledAvailable = shuffle(available)
+  return [...shuffledAvailable, ...cooling]
+}
+
+function recordHistory(deckId: string, word: string, totalCards: number) {
+  if (!deckId || !word) return
+  const historyMap = load<Record<string, string[]>>(KEY_HISTORY, {})
+  const list = historyMap[deckId] ? [...historyMap[deckId]] : []
+  const filtered = list.filter((w) => w !== word)
+  filtered.push(word)
+  const k = getCooldownLimit(totalCards)
+  historyMap[deckId] = filtered.slice(-k)
+  store(KEY_HISTORY, historyMap)
+}
+
 function wordSize(word: string) {
+  const parts = word.split(/\s+/)
+  const maxSingle = Math.max(...parts.map((w) => w.length), 0)
   const n = word.length
-  if (n <= 9) return 'clamp(3.2rem, 17vw, 13rem)'
-  if (n <= 15) return 'clamp(2.6rem, 12vw, 9rem)'
-  if (n <= 24) return 'clamp(2.1rem, 8.5vw, 6rem)'
-  return 'clamp(1.7rem, 6.5vw, 4.2rem)'
+
+  if (maxSingle >= 13 || n >= 28) return 'clamp(1.25rem, min(5.5vw, 14vh), 3.4rem)'
+  if (maxSingle >= 10 || n >= 20) return 'clamp(1.55rem, min(7.5vw, 17vh), 4.6rem)'
+  if (maxSingle >= 7 || n >= 12)  return 'clamp(1.9rem, min(10vw, 22vh), 6.2rem)'
+  if (n >= 8)                     return 'clamp(2.3rem, min(13vw, 26vh), 8rem)'
+  return 'clamp(2.7rem, min(16vw, 32vh), 10.5rem)'
 }
 
 /** Picks black or white text for a background colour, using WCAG luminance. */
@@ -282,6 +321,8 @@ export default function App() {
 
   const phaseRef = useRef(phase)
   phaseRef.current = phase
+  const deckRef = useRef(deck)
+  deckRef.current = deck
   const flashRef = useRef(flash)
   flashRef.current = flash
   const armedRef = useRef(false)
@@ -342,6 +383,11 @@ export default function App() {
     play('end')
     buzz([120, 60, 120])
     setFlash(null)
+    const current = queueRef.current[indexRef.current]
+    const currentDeck = deckRef.current
+    if (current && currentDeck) {
+      recordHistory(currentDeck.id, current, currentDeck.words.length)
+    }
     setPhase('results')
     void keepScreenAwake(false)
     exitImmersive()
@@ -355,7 +401,12 @@ export default function App() {
     if (next < queueRef.current.length) {
       setIndex(next)
     } else {
-      setQueue(shuffle(queueRef.current))
+      const currentDeck = deckRef.current
+      if (currentDeck) {
+        setQueue(buildQueue(currentDeck.words, currentDeck.id))
+      } else {
+        setQueue(shuffle(queueRef.current))
+      }
       setIndex(0)
     }
   }, [])
@@ -368,6 +419,10 @@ export default function App() {
       if (phaseRef.current !== 'play' || flashRef.current) return
       const current = queue[index]
       if (!current) return
+      const currentDeck = deckRef.current
+      if (currentDeck) {
+        recordHistory(currentDeck.id, current, currentDeck.words.length)
+      }
       setResults((r) => [...r, { word: current, got }])
       play(got ? 'correct' : 'pass')
       buzz(got ? 45 : [20, 50, 20])
@@ -491,7 +546,7 @@ export default function App() {
       const result = await askTiltPermission()
       setTiltPermission(result)
     }
-    setQueue(shuffle(deck.words))
+    setQueue(buildQueue(deck.words, deck.id))
     setIndex(0)
     setResults([])
     setFlash(null)
@@ -629,6 +684,7 @@ export default function App() {
         onEnableTilt={enableTilt}
         onImport={(imported) => setCustom((list) => [...list, ...imported])}
         onClearBest={() => setBest({})}
+        onClearHistory={() => store(KEY_HISTORY, {})}
         onBack={() => setPhase('home')}
       />
     )
@@ -960,9 +1016,10 @@ function SettingsScreen(props: {
   onEnableTilt: () => void
   onImport: (decks: Deck[]) => void
   onClearBest: () => void
+  onClearHistory: () => void
   onBack: () => void
 }) {
-  const { settings, tiltPermission, decks, custom, onChange, onEnableTilt, onImport, onClearBest, onBack } = props
+  const { settings, tiltPermission, decks, custom, onChange, onEnableTilt, onImport, onClearBest, onClearHistory, onBack } = props
   const fileRef = useRef<HTMLInputElement>(null)
   const [message, setMessage] = useState('')
 
@@ -1030,8 +1087,23 @@ function SettingsScreen(props: {
         <button className="btn btn-quiet" onClick={() => fileRef.current?.click()}>
           Import deck file
         </button>
-        <button className="btn btn-quiet" onClick={onClearBest}>
+        <button
+          className="btn btn-quiet"
+          onClick={() => {
+            onClearBest()
+            setMessage('Best scores have been reset.')
+          }}
+        >
           Reset best scores
+        </button>
+        <button
+          className="btn btn-quiet"
+          onClick={() => {
+            onClearHistory()
+            setMessage('Card cooldown history has been reset.')
+          }}
+        >
+          Reset card cooldowns
         </button>
       </div>
       <input

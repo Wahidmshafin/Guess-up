@@ -615,7 +615,8 @@ code {
 
 .play {
   justify-content: space-between;
-  padding: calc(0.6rem + env(safe-area-inset-top)) 1rem calc(0.6rem + env(safe-area-inset-bottom));
+  padding: calc(0.6rem + env(safe-area-inset-top)) clamp(0.75rem, 3vw, 2rem) calc(0.6rem + env(safe-area-inset-bottom));
+  overflow: hidden;
 }
 
 .word {
@@ -623,13 +624,19 @@ code {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 0.5rem;
+  width: 100%;
+  max-width: min(94vw, 980px);
+  margin: 0 auto;
+  padding: 0 clamp(0.5rem, 2.5vw, 1.8rem);
   font-weight: 900;
-  font-stretch: 125%;
-  letter-spacing: -0.045em;
-  line-height: 0.92;
+  font-stretch: 120%;
+  letter-spacing: -0.035em;
+  line-height: 0.96;
   text-transform: uppercase;
   text-wrap: balance;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  hyphens: auto;
   text-shadow: 0 3px 0 rgba(0, 0, 0, 0.14);
 }
 
@@ -769,5 +776,9 @@ code {
   }
   .btn-big {
     padding: 0.85rem 1.2rem;
+  }
+  .word {
+    max-height: 62vh;
+    padding: 0 1.2rem;
   }
 }
