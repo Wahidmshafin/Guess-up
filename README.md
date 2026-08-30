@@ -19,16 +19,14 @@ Hold the phone flat against your forehead facing your friends. Tilt **down** whe
   - `Escape` to finish early.
 - **🎬 141-Card Movies & Series Deck**:
   - Includes iconic Bangladeshi (Dhallywood & OTT), Hindi / Bollywood, and English / Hollywood cinema classics and hits.
-- **🃏 9 Curated Built-in Decks in `public/decks.json`**:
+- **🃏 7 Curated Built-in Decks in `public/decks.json` & `src/decks.ts`**:
   - 🎬 *Movies & Series* (141 cards)
-  - 🎭 *Act It Out* (30 cards)
-  - 🦁 *Animals & Wildlife* (35 cards)
-  - 🌟 *Superstars & Icons* (30 cards)
-  - 🍕 *Food & Drinks* (30 cards)
-  - 📼 *90s & 2000s Nostalgia* (26 cards)
-  - 🎮 *Video Games* (26 cards)
-  - 🌍 *World Landmarks* (25 cards)
-  - 🎈 *Kids Fun & Cartoons* (25 cards)
+  - 🌟 *Superstars & Icons* (79 cards)
+  - 🦁 *Animals & Wildlife* (40 cards)
+  - 🍕 *Food & Drinks* (35 cards)
+  - 🎭 *Act It Out* (35 cards)
+  - 🌍 *World Landmarks* (30 cards)
+  - 🎉 *Starter Pack* (20 cards)
 - **✨ Custom Deck Editor & JSON Export/Import**:
   - Create custom decks in-app with emoji icons and color swatches.
   - Export all decks as a single `.json` file or import deck files anytime.
