@@ -257,20 +257,100 @@ function exitImmersive() {
   }
 }
 
-let wakeLock: { release: () => Promise<void> } | null = null
+let wakeLockSentinel: { release: () => Promise<void>; addEventListener?: (event: string, cb: () => void) => void } | null = null
+let wakeLockActive = false
+let fallbackVideo: HTMLVideoElement | null = null
 
-async function keepScreenAwake(on: boolean) {
+// A 1-frame silent MP4 base64 video loop that keeps mobile browsers awake (NoSleep technique)
+const WAKE_VIDEO_DATA =
+  'data:video/mp4;base64,AAAAHGZ0eXBtcDQyAAAAAG1wNDJpc29tYXZjMQAAAAhmcmVlAAAAGG1kYXQAAAAAAAACAAAAAUFwcGxlAAAAAAACbW9vdgAAAGxtdmhkAAAAAMK+v2bCvr9mAAAD6AAAB9AAAUAAAYAAAAEAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAAABUdHJhawAAAFx0a2hkAAAAAwK+v2bCvr9mAAAAAQAAAAAAB9AAAAAAAAAAAAAAAAEAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGRtZGlhAAAAHmdoZGxyAAAAAAAAAAB2aWRlAAAAAAAAAAAAAAAAGG1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAAFdzdGJsAAAAmHN0c2QAAAAAAAAAAQAAAGhhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAHgA+ABIAEgAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY//8AAAAAbWNvbGxyYXBwAAAAAGF2Y0MAf0AV//+AAAH0AAP//wAA/4A='
+
+function getFallbackVideo(): HTMLVideoElement {
+  if (!fallbackVideo) {
+    fallbackVideo = document.createElement('video')
+    fallbackVideo.setAttribute('playsinline', '')
+    fallbackVideo.setAttribute('webkit-playsinline', '')
+    fallbackVideo.setAttribute('muted', '')
+    fallbackVideo.setAttribute('loop', '')
+    fallbackVideo.muted = true
+    fallbackVideo.loop = true
+    fallbackVideo.src = WAKE_VIDEO_DATA
+    fallbackVideo.style.position = 'fixed'
+    fallbackVideo.style.bottom = '0'
+    fallbackVideo.style.right = '0'
+    fallbackVideo.style.width = '1px'
+    fallbackVideo.style.height = '1px'
+    fallbackVideo.style.opacity = '0.001'
+    fallbackVideo.style.pointerEvents = 'none'
+    fallbackVideo.style.zIndex = '-999'
+  }
+  return fallbackVideo
+}
+
+async function requestNativeWakeLock() {
   try {
-    const wl = (navigator as unknown as { wakeLock?: { request: (t: 'screen') => Promise<{ release: () => Promise<void> }> } }).wakeLock
-    if (on) {
-      if (!wakeLock && wl) wakeLock = await wl.request('screen')
-    } else if (wakeLock) {
-      await wakeLock.release()
-      wakeLock = null
+    const nav = navigator as unknown as { wakeLock?: { request: (t: 'screen') => Promise<{ release: () => Promise<void>; addEventListener?: (e: string, cb: () => void) => void }> } }
+    if (nav.wakeLock && !wakeLockSentinel) {
+      const sentinel = await nav.wakeLock.request('screen')
+      wakeLockSentinel = sentinel
+      sentinel.addEventListener?.('release', () => {
+        wakeLockSentinel = null
+      })
     }
   } catch {
-    /* not supported */
+    /* native wake lock unsupported or disallowed in low power mode */
   }
+}
+
+async function keepScreenAwake(on: boolean) {
+  wakeLockActive = on
+
+  if (on) {
+    // 1. Request Native WakeLock API
+    void requestNativeWakeLock()
+
+    // 2. Play hidden video fallback (works on iOS Safari and WebViews)
+    try {
+      const video = getFallbackVideo()
+      if (!document.body.contains(video)) {
+        document.body.appendChild(video)
+      }
+      void video.play()
+    } catch {
+      /* ignore */
+    }
+  } else {
+    // 1. Release Native WakeLock
+    if (wakeLockSentinel) {
+      try {
+        await wakeLockSentinel.release()
+      } catch {
+        /* ignore */
+      }
+      wakeLockSentinel = null
+    }
+
+    // 2. Pause and detach fallback video
+    if (fallbackVideo) {
+      try {
+        fallbackVideo.pause()
+        if (document.body.contains(fallbackVideo)) {
+          document.body.removeChild(fallbackVideo)
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+// Re-acquire wake lock whenever returning to the tab/app while playing
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && wakeLockActive) {
+      void keepScreenAwake(true)
+    }
+  })
 }
 
 function normaliseDecks(raw: unknown): Deck[] {
@@ -531,16 +611,27 @@ export default function App() {
     setBest((prev) => (score > (prev[deck.id] ?? 0) ? { ...prev, [deck.id]: score } : prev))
   }, [phase, deck, results])
 
+  /* ---- keep screen awake during active game flow ---- */
+  useEffect(() => {
+    if (phase === 'ready' || phase === 'countdown' || phase === 'play') {
+      void keepScreenAwake(true)
+    } else {
+      void keepScreenAwake(false)
+    }
+  }, [phase])
+
   /* ---- actions ---- */
 
   const openDeck = (chosen: Deck) => {
     setDeck(chosen)
     setTiltZ(null)
+    void keepScreenAwake(true)
     setPhase('ready')
   }
 
   const startRound = async () => {
     if (!deck) return
+    void keepScreenAwake(true)
     void enterImmersive()
     if (settings.tilt && tiltPermission === 'unknown') {
       const result = await askTiltPermission()
@@ -552,7 +643,6 @@ export default function App() {
     setFlash(null)
     flashRef.current = null
     armedRef.current = false
-    void keepScreenAwake(true)
     setPhase('countdown')
   }
 
