@@ -1,8 +1,13 @@
-import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
 
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-  base: './', // Ensures relative assets work on GitHub Pages
+  // Relative paths so the same build works on localhost, on a custom domain,
+  // and under https://<user>.github.io/<repo>/ without extra configuration.
+  base: './',
+  server: {
+    // Lets you open the dev server on your phone over the LAN.
+    host: true,
+  },
 })

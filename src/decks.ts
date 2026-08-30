@@ -1,15 +1,50 @@
-import type { Deck } from './types';
+export type Deck = {
+  id: string
+  name: string
+  emoji: string
+  color: string
+  description?: string
+  words: string[]
+  custom?: boolean
+}
 
-export const DEFAULT_DECKS: Deck[] = [
+export const ALL_DECKS: Deck[] = [
+  {
+    id: 'starter',
+    name: 'Starter Pack',
+    emoji: '🎉',
+    color: '#F2B705',
+    description: 'Quick, easy, and fun party warm-up cards',
+    words: [
+      'Elephant',
+      'Pizza',
+      'Guitar',
+      'Rainbow',
+      'Astronaut',
+      'Bicycle',
+      'Volcano',
+      'Penguin',
+      'Firefighter',
+      'Rollercoaster',
+      'Helicopter',
+      'Telescope',
+      'Submarine',
+      'Campfire',
+      'Fireworks',
+      'Pyramid',
+      'Kangaroo',
+      'Cupcake',
+      'Sunglasses',
+      'Snowman'
+    ]
+  },
   {
     id: 'movies-tv',
-    title: 'Blockbuster Movies & Series',
-    description: 'Iconic English, Bollywood & Bangladeshi cinema and hit series!',
-    icon: '🎬',
-    color: 'from-amber-500 to-rose-600',
-    category: 'Entertainment',
-    cards: [
-      // --- Iconic Bangladeshi (Dhallywood & OTT) Movies & Series ---
+    name: 'Movies & Series',
+    emoji: '🎬',
+    color: '#E8453C',
+    description: 'Blockbuster English, Bollywood & Bangladeshi cinema and hit series',
+    words: [
       'Beder Meye Josna',
       'Hawa',
       'Priyotoma',
@@ -48,8 +83,6 @@ export const DEFAULT_DECKS: Deck[] = [
       'Kaiser',
       'Myself Allen Swapan',
       'Gondi',
-
-      // --- Legendary & Famous Hindi (Bollywood) Movies & Series ---
       'Dilwale Dulhania Le Jayenge (DDLJ)',
       'Sholay',
       '3 Idiots',
@@ -103,8 +136,6 @@ export const DEFAULT_DECKS: Deck[] = [
       'Scam 1992: The Harshad Mehta Story',
       'Farzi',
       'Pataal Lok',
-
-      // --- Global & Legendary English Movies & Series ---
       'Harry Potter',
       'Titanic',
       'The Avengers',
@@ -150,19 +181,16 @@ export const DEFAULT_DECKS: Deck[] = [
       'Better Call Saul',
       'The Boys',
       'Prison Break',
-      'The Walking Dead',
-      'Kung Fu Panda',
-      'Frozen'
+      'The Walking Dead'
     ]
   },
   {
     id: 'act-it-out',
-    title: 'Act It Out (Charades)',
-    description: 'No talking allowed! Act out funny actions and scenarios.',
-    icon: '🎭',
-    color: 'from-purple-500 to-indigo-600',
-    category: 'Party',
-    cards: [
+    name: 'Act It Out',
+    emoji: '🎭',
+    color: '#8B5CF6',
+    description: 'No talking allowed! Act out funny actions and scenarios',
+    words: [
       'Brushing your teeth',
       'Walking a tightrope',
       'Opening a champagne bottle',
@@ -192,70 +220,69 @@ export const DEFAULT_DECKS: Deck[] = [
       'Stealing a cookie from a jar',
       'Karate kicking',
       'Escaping quicksand',
-      'Conducting an orchestra'
+      'Conducting an orchestra',
+      'Tasting sour lemon',
+      'Arm wrestling',
+      'Walking on hot coals',
+      'Bowling a strike',
+      'Hypnotizing someone'
     ]
   },
   {
     id: 'animals-nature',
-    title: 'Animals & Wildlife',
-    description: 'From deep sea creatures to jungle predators.',
-    icon: '🦁',
-    color: 'from-emerald-500 to-teal-700',
-    category: 'Nature',
-    cards: [
+    name: 'Animals & Wildlife',
+    emoji: '🦁',
+    color: '#1E9E6A',
+    description: 'From deep sea creatures to jungle predators',
+    words: [
       'Lion',
       'Kangaroo',
       'Penguin',
       'African Elephant',
       'Chimpanzee',
-      'Dolphin',
+      'Bottlenose Dolphin',
       'Giraffe',
       'Sloth',
-      'Tiger',
+      'Flamingo',
       'Giant Octopus',
       'Cheetah',
       'Giant Panda',
       'Koala',
       'Peacock',
       'Crocodile',
-      'Blue Whale',
+      'Silverback Gorilla',
       'Zebra',
       'Great Horned Owl',
-      'Hummingbird',
+      'Chameleon',
       'Seahorse',
       'Polar Bear',
       'Platypus',
       'Hedgehog',
-      'Shark',
+      'Hammerhead Shark',
       'Bald Eagle',
-      'Peacock',
-      'Snake',
-      'Monkey',
+      'Llama',
+      'Walrus',
+      'Meerkat',
       'Wolf',
       'Hippopotamus',
       'Komodo Dragon',
-      'Sea Lion',
-      'Anteater',
+      'Hummingbird',
+      'Beaver',
       'Grizzly Bear',
       'Ostrich',
-      'Dragonfly',
-      'Orca',
-      'Turtle',
-      'Rabbit',
-      'Katla',
-      'Camel',
-      'Parrots',
-      'Cuckoos'
+      'Blue Whale',
+      'Jellyfish',
+      'Red Fox',
+      'Gorilla'
     ]
   },
   {
-    id: 'celebrities-icons',
-    title: 'Celebrities & Superstars',
-    description: 'A-list actors, pop stars, athletes, and legendary icons.',
-    icon: '🌟',
-    color: 'from-pink-500 to-rose-500',
-    category: 'Pop Culture',
-    cards: [
+    id: 'celebrities',
+    name: 'Superstars & Icons',
+    emoji: '🌟',
+    color: '#D6336C',
+    description: 'A-list actors, pop stars, athletes, and legends',
+    words: [
       'Taylor Swift',
       'Cristiano Ronaldo',
       'Beyoncé',
@@ -285,17 +312,21 @@ export const DEFAULT_DECKS: Deck[] = [
       'Katy Perry',
       'Justin Bieber',
       'Emma Watson',
-      'Post Malone'
+      'Post Malone',
+      'Shah Rukh Khan',
+      'Meryl Streep',
+      'David Beckham',
+      'Cillian Murphy',
+      'Bruno Mars'
     ]
   },
   {
     id: 'food-drinks',
-    title: 'Food, Snacks & Drinks',
-    description: 'Mouth-watering dishes, street food, and beverages.',
-    icon: '🍕',
-    color: 'from-orange-500 to-amber-600',
-    category: 'Lifestyle',
-    cards: [
+    name: 'Food & Drinks',
+    emoji: '🍕',
+    color: '#F0803C',
+    description: 'Mouth-watering dishes, snacks, and beverages',
+    words: [
       'Pizza Margherita',
       'Sushi & Sashimi',
       'Chocolate Ice Cream',
@@ -325,17 +356,60 @@ export const DEFAULT_DECKS: Deck[] = [
       'Chocolate Milkshake',
       'Pad Thai',
       'Fresh Dim Sum',
-      'Fondue'
+      'Cheese Fondue',
+      'Biryani',
+      'Falafel',
+      'Samosa',
+      'Tiramisu',
+      'Smoothie Bowl'
+    ]
+  },
+  {
+    id: 'sci-fi-fantasy',
+    name: 'Sci-Fi & Fantasy',
+    emoji: '🚀',
+    color: '#8B5CF6',
+    description: 'Superheroes, space odysseys, wizards, and legends',
+    words: [
+      'Darth Vader',
+      'Iron Man',
+      'Doctor Who',
+      'Batman',
+      'Yoda',
+      'Spider-Man',
+      'Goku',
+      'Thanos',
+      'Wolverine',
+      'The Mandalorian',
+      'Optimus Prime',
+      'Deadpool',
+      'Superman',
+      'Wonder Woman',
+      'Gollum',
+      'Black Panther',
+      'Captain America',
+      'Cyberpunk 2077',
+      'Xenomorph Alien',
+      'Neo (The Matrix)',
+      'Godzilla',
+      'Hulk',
+      'Thor',
+      'Gandalf the Grey',
+      'Katniss Everdeen',
+      'Luke Skywalker',
+      'Captain Jack Sparrow',
+      'Geralt of Rivia (The Witcher)',
+      'Percy Jackson',
+      'Albus Dumbledore'
     ]
   },
   {
     id: 'retro-nostalgia',
-    title: '90s & 2000s Nostalgia',
-    description: 'Gadgets, trends, and toys from the golden era.',
-    icon: '📼',
-    color: 'from-fuchsia-500 to-cyan-500',
-    category: 'Retro',
-    cards: [
+    name: '90s & 2000s Nostalgia',
+    emoji: '📼',
+    color: '#0E9BA6',
+    description: 'Gadgets, trends, and toys from the golden era',
+    words: [
       'Sony Walkman cassette player',
       'Tamagotchi virtual pet',
       'Blockbuster Video store',
@@ -360,17 +434,21 @@ export const DEFAULT_DECKS: Deck[] = [
       'CD Discman',
       'Slap Bracelets',
       'Furby toy',
-      'Pagers / Beeper'
+      'Pagers / Beeper',
+      'Lava Lamp',
+      'Silly Putty',
+      'Walkman',
+      'Laser Tag',
+      'Crazy Bones'
     ]
   },
   {
     id: 'gaming-legends',
-    title: 'Video Games & Characters',
-    description: 'Legendary games, gaming heroes, and modern esports.',
-    icon: '🎮',
-    color: 'from-violet-600 to-blue-600',
-    category: 'Gaming',
-    cards: [
+    name: 'Video Games',
+    emoji: '🎮',
+    color: '#2563EB',
+    description: 'Legendary games, heroes, and modern esports',
+    words: [
       'Minecraft (Creeper)',
       'Super Mario Bros',
       'Fortnite Battle Royale',
@@ -396,17 +474,20 @@ export const DEFAULT_DECKS: Deck[] = [
       'Apex Legends',
       'Counter-Strike',
       'Fall Guys',
-      'The Sims'
+      'The Sims',
+      'Subway Surfers',
+      'Candy Crush Saga',
+      'Valorant',
+      'Tomb Raider (Lara Croft)'
     ]
   },
   {
-    id: 'world-wonders',
-    title: 'World Travel & Landmarks',
-    description: 'Famous monuments, natural wonders, and great cities.',
-    icon: '🌍',
-    color: 'from-blue-500 to-teal-600',
-    category: 'Travel',
-    cards: [
+    id: 'world-travel',
+    name: 'World Landmarks',
+    emoji: '🌍',
+    color: '#0E9BA6',
+    description: 'Famous monuments, natural wonders, and great cities',
+    words: [
       'Eiffel Tower (Paris)',
       'Statue of Liberty (New York)',
       'Great Wall of China',
@@ -431,17 +512,21 @@ export const DEFAULT_DECKS: Deck[] = [
       'Santorini (Greece)',
       'Hollywood Sign (Los Angeles)',
       'Petra (Jordan)',
-      'Louvre Glass Pyramid'
+      'Louvre Glass Pyramid',
+      'Mount Kilimanjaro',
+      'Acropolis of Athens',
+      'Victoria Falls',
+      'Panama Canal',
+      'Chichen Itza'
     ]
   },
   {
     id: 'kids-cartoons',
-    title: 'Kids Fun & Cartoons',
-    description: 'Colorful animations, friendly characters, and fairy tales.',
-    icon: '🎈',
-    color: 'from-yellow-400 to-rose-500',
-    category: 'Kids & Family',
-    cards: [
+    name: 'Kids Fun & Cartoons',
+    emoji: '🎈',
+    color: '#F2B705',
+    description: 'Colorful animations, friendly characters, and fairy tales',
+    words: [
       'SpongeBob SquarePants',
       'Mickey Mouse',
       'Peppa Pig',
@@ -466,145 +551,12 @@ export const DEFAULT_DECKS: Deck[] = [
       'Donald Duck',
       'Clifford the Big Red Dog',
       'Pinocchio',
-      'Peter Pan'
+      'Peter Pan',
+      'Aladdin',
+      'Moana',
+      'Finding Nemo',
+      'Scooby Doo',
+      'The Incredibles'
     ]
   }
-];
-
-const STORAGE_KEY = 'guess_up_custom_decks_v2';
-const DELETED_DEFAULT_IDS_KEY = 'guess_up_deleted_defaults_v2';
-
-/**
- * Load all decks from LocalStorage or fallback to default decks
- */
-export function getStoredDecks(): Deck[] {
-  try {
-    const customData = localStorage.getItem(STORAGE_KEY);
-    const deletedDefaultsData = localStorage.getItem(DELETED_DEFAULT_IDS_KEY);
-    const deletedDefaultIds: string[] = deletedDefaultsData ? JSON.parse(deletedDefaultsData) : [];
-
-    // Filter defaults if user explicitly deleted any
-    const activeDefaults = DEFAULT_DECKS.filter(d => !deletedDefaultIds.includes(d.id));
-
-    if (!customData) {
-      return activeDefaults;
-    }
-
-    const parsed: Deck[] = JSON.parse(customData);
-    if (!Array.isArray(parsed)) return activeDefaults;
-
-    // Retain user custom decks and merge with active default decks
-    const customDecks = parsed.filter(d => d.isCustom);
-    return [...customDecks, ...activeDefaults];
-  } catch (error) {
-    console.error('Failed to load decks from storage, using defaults:', error);
-    return DEFAULT_DECKS;
-  }
-}
-
-/**
- * Save current deck collection to LocalStorage
- */
-export function saveDecksToStorage(decks: Deck[]): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(decks));
-  } catch (error) {
-    console.error('Failed to save decks to storage:', error);
-  }
-}
-
-/**
- * Add or update a single custom deck
- */
-export function saveOrUpdateDeck(deck: Deck): Deck[] {
-  const currentDecks = getStoredDecks();
-  const index = currentDecks.findIndex(d => d.id === deck.id);
-
-  let updated: Deck[];
-  if (index >= 0) {
-    updated = [...currentDecks];
-    updated[index] = deck;
-  } else {
-    updated = [deck, ...currentDecks];
-  }
-
-  saveDecksToStorage(updated);
-  return updated;
-}
-
-/**
- * Delete a deck by ID
- */
-export function deleteDeckById(id: string): Deck[] {
-  const currentDecks = getStoredDecks();
-  const updated = currentDecks.filter(d => d.id !== id);
-
-  // If this was a default deck, mark it as deleted so it won't reappear on reload
-  const isDefault = DEFAULT_DECKS.some(d => d.id === id);
-  if (isDefault) {
-    try {
-      const deletedData = localStorage.getItem(DELETED_DEFAULT_IDS_KEY);
-      const list: string[] = deletedData ? JSON.parse(deletedData) : [];
-      if (!list.includes(id)) {
-        list.push(id);
-        localStorage.setItem(DELETED_DEFAULT_IDS_KEY, JSON.stringify(list));
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  saveDecksToStorage(updated);
-  return updated;
-}
-
-/**
- * Reset all decks to factory default collection
- */
-export function resetToFactoryDefaults(): Deck[] {
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-    localStorage.removeItem(DELETED_DEFAULT_IDS_KEY);
-  } catch {
-    // ignore
-  }
-  return DEFAULT_DECKS;
-}
-
-/**
- * Export all decks as formatted JSON string
- */
-export function exportDecksAsJSON(decks: Deck[]): string {
-  return JSON.stringify(decks, null, 2);
-}
-
-/**
- * Import and validate JSON deck list
- */
-export function importDecksFromJSON(jsonString: string): { success: boolean; decks?: Deck[]; error?: string } {
-  try {
-    const parsed = JSON.parse(jsonString);
-    if (!Array.isArray(parsed)) {
-      return { success: false, error: 'JSON root must be an array of Deck objects.' };
-    }
-
-    // Validate structure of each item
-    for (let i = 0; i < parsed.length; i++) {
-      const item = parsed[i];
-      if (!item.id || typeof item.id !== 'string') {
-        return { success: false, error: `Deck at index ${i} is missing a valid 'id' string.` };
-      }
-      if (!item.title || typeof item.title !== 'string') {
-        return { success: false, error: `Deck "${item.id}" is missing a valid 'title' string.` };
-      }
-      if (!Array.isArray(item.cards) || item.cards.length === 0) {
-        return { success: false, error: `Deck "${item.title}" must have a non-empty 'cards' array.` };
-      }
-    }
-
-    saveDecksToStorage(parsed);
-    return { success: true, decks: parsed };
-  } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : 'Invalid JSON format' };
-  }
-}
+]

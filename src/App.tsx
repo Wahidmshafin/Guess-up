@@ -1,1241 +1,1055 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import type { Deck, GamePhase, CardResult, GameSettings } from './types';
-import {
-  getStoredDecks,
-  saveOrUpdateDeck,
-  deleteDeckById,
-  resetToFactoryDefaults,
-  exportDecksAsJSON,
-  importDecksFromJSON
-} from './decks';
-import { soundFx } from './audio';
-import { useDeviceOrientation } from './hooks/useDeviceOrientation';
-import './App.css';
-
-const DEFAULT_SETTINGS: GameSettings = {
-  roundDuration: 60,
-  soundEnabled: true,
-  tiltSensitivity: 'medium',
-  hapticsEnabled: true,
-};
-
-const COLOR_OPTIONS = [
-  { name: 'Purple Sunset', value: 'from-purple-600 to-indigo-600' },
-  { name: 'Amber Blaze', value: 'from-amber-500 to-rose-600' },
-  { name: 'Emerald Forest', value: 'from-emerald-500 to-teal-700' },
-  { name: 'Neon Pink', value: 'from-pink-500 to-rose-500' },
-  { name: 'Ocean Blue', value: 'from-blue-600 to-cyan-600' },
-  { name: 'Retro Disco', value: 'from-fuchsia-500 to-cyan-500' },
-  { name: 'Solar Flare', value: 'from-yellow-400 to-orange-600' },
-  { name: 'Midnight Violet', value: 'from-violet-800 to-fuchsia-900' },
-];
-
-const EMOJI_PRESETS = ['🎬', '🦁', '🎭', '🌟', '🍕', '🎸', '🎮', '🌍', '🎈', '⚡', '🏆', '🔥', '🚀', '🧙‍♂️', '🍔', '👻'];
-
-export function App() {
-  // --- Persistent State ---
-  const [decks, setDecks] = useState<Deck[]>(() => getStoredDecks());
-  const [settings, setSettings] = useState<GameSettings>(() => {
-    try {
-      const saved = localStorage.getItem('guess_up_settings_v1');
-      return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
-    } catch {
-      return DEFAULT_SETTINGS;
-    }
-  });
-
-  // --- Game Flow State ---
-  const [phase, setPhase] = useState<GamePhase>('home');
-  const [activeDeck, setActiveDeck] = useState<Deck | null>(null);
-  const [countdown, setCountdown] = useState<number>(3);
-  const [timeLeft, setTimeLeft] = useState<number>(settings.roundDuration);
-  const [deckCards, setDeckCards] = useState<string[]>([]);
-  const [currentCardIndex, setCurrentCardIndex] = useState<number>(0);
-  const [roundResults, setRoundResults] = useState<CardResult[]>([]);
-  const [flashFeedback, setFlashFeedback] = useState<'correct' | 'pass' | null>(null);
-  const [isPaused, setIsPaused] = useState<boolean>(false);
-  const [resultsFilter, setResultsFilter] = useState<'all' | 'correct' | 'passed'>('all');
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-
-  // --- Explorer & Filter State ---
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [selectedCategory, setSelectedCategory] = useState<string>('All');
-
-  // --- Custom Deck Creator State ---
-  const [editingDeckId, setEditingDeckId] = useState<string | null>(null);
-  const [deckFormTitle, setDeckFormTitle] = useState<string>('');
-  const [deckFormDesc, setDeckFormDesc] = useState<string>('');
-  const [deckFormIcon, setDeckFormIcon] = useState<string>('🎉');
-  const [deckFormColor, setDeckFormColor] = useState<string>(COLOR_OPTIONS[0].value);
-  const [deckFormCategory, setDeckFormCategory] = useState<string>('Custom');
-  const [deckFormCardsText, setDeckFormCardsText] = useState<string>('');
-  const [formError, setFormError] = useState<string | null>(null);
-
-  // --- Raw JSON Editor State ---
-  const [rawJsonText, setRawJsonText] = useState<string>('');
-  const [jsonError, setJsonError] = useState<string | null>(null);
-  const [jsonSuccessMsg, setJsonSuccessMsg] = useState<string | null>(null);
-
-  // --- Sound Sync ---
-  useEffect(() => {
-    soundFx.enabled = settings.soundEnabled;
-    try {
-      localStorage.setItem('guess_up_settings_v1', JSON.stringify(settings));
-    } catch {
-      // ignore
-    }
-  }, [settings]);
-
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 2500);
-  };
-
-  // --- Device Motion Tilt Hook ---
-  const handleTiltAction = (action: 'correct' | 'pass') => {
-    if (phase === 'playing' && !isPaused) {
-      if (action === 'correct') {
-        handleCardAnswer('correct');
-      } else if (action === 'pass') {
-        handleCardAnswer('pass');
-      }
-    }
-  };
-
-  const { isSupported: gyroSupported, hasPermission: gyroPermission, requestPermission } = useDeviceOrientation({
-    enabled: phase === 'playing',
-    sensitivity: settings.tiltSensitivity,
-    haptics: settings.hapticsEnabled,
-    onTiltAction: handleTiltAction,
-  });
-
-  // --- Filtered Decks ---
-  const categories = useMemo(() => {
-    const set = new Set<string>(['All']);
-    decks.forEach(d => {
-      if (d.category) set.add(d.category);
-    });
-    return Array.from(set);
-  }, [decks]);
-
-  const filteredDecks = useMemo(() => {
-    return decks.filter(d => {
-      const matchCat = selectedCategory === 'All' || d.category === selectedCategory;
-      const matchSearch =
-        d.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        d.description.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchCat && matchSearch;
-    });
-  }, [decks, selectedCategory, searchQuery]);
-
-  // --- Shuffling Deck Cards ---
-  const shuffleCards = (cards: string[]): string[] => {
-    const arr = [...cards];
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
-    return arr;
-  };
-
-  // --- Start Game Flow ---
-  const handleSelectDeck = (deck: Deck) => {
-    soundFx.playTap();
-    if (deck.cards.length === 0) {
-      showToast('This deck has no cards! Add words to play.');
-      return;
-    }
-    setActiveDeck(deck);
-    setDeckCards(shuffleCards(deck.cards));
-    setCurrentCardIndex(0);
-    setRoundResults([]);
-    setTimeLeft(settings.roundDuration);
-    setCountdown(3);
-    setPhase('countdown');
-  };
-
-  // --- 3-2-1 Countdown Timer ---
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    if (phase === 'countdown') {
-      soundFx.playCountdownBeep(countdown === 1);
-      if (countdown > 0) {
-        timer = setTimeout(() => {
-          setCountdown(prev => prev - 1);
-        }, 1000);
-      } else {
-        // Go!
-        soundFx.playCountdownBeep(true);
-        setPhase('playing');
-      }
-    }
-    return () => clearTimeout(timer);
-  }, [phase, countdown]);
-
-  // --- Active Round Game Timer ---
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => {
-    if (phase === 'playing' && !isPaused) {
-      timerRef.current = setInterval(() => {
-        setTimeLeft(prev => {
-          if (prev <= 1) {
-            clearInterval(timerRef.current!);
-            soundFx.playTimeUpSound();
-            setPhase('gameover');
-            return 0;
-          }
-          if (prev <= 10) {
-            soundFx.playTick();
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    }
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [phase, isPaused]);
-
-  // --- Card Guess Processing (Correct / Pass) ---
-  const handleCardAnswer = (action: 'correct' | 'pass') => {
-    if (phase !== 'playing' || isPaused) return;
-
-    const currentCard = deckCards[currentCardIndex];
-    if (!currentCard) return;
-
-    // Play Audio & Flash FX
-    if (action === 'correct') {
-      soundFx.playCorrectSound();
-      setFlashFeedback('correct');
-    } else {
-      soundFx.playPassSound();
-      setFlashFeedback('pass');
-    }
-
-    setTimeout(() => setFlashFeedback(null), 400);
-
-    // Record Result
-    setRoundResults(prev => [
-      ...prev,
-      {
-        text: currentCard,
-        status: action === 'correct' ? 'correct' : 'passed',
-        timestamp: Date.now(),
-      },
-    ]);
-
-    // Advance Card or End Round if out of cards
-    if (currentCardIndex + 1 < deckCards.length) {
-      setCurrentCardIndex(prev => prev + 1);
-    } else {
-      // Shuffled through all cards in deck
-      soundFx.playTimeUpSound();
-      setPhase('gameover');
-    }
-  };
-
-  // --- Desktop Keyboard Shortcuts ---
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (phase !== 'playing') return;
-
-      if (e.key === 'ArrowRight' || e.key === 'Enter') {
-        e.preventDefault();
-        handleCardAnswer('correct');
-      } else if (e.key === 'ArrowLeft' || e.key === 'Escape') {
-        e.preventDefault();
-        handleCardAnswer('pass');
-      } else if (e.key === ' ' || e.code === 'Space') {
-        e.preventDefault();
-        setIsPaused(prev => !prev);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [phase, currentCardIndex, deckCards, isPaused]);
-
-  // --- Fullscreen Toggle Helper ---
-  const toggleFullScreen = () => {
-    soundFx.playTap();
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(() => {});
-    } else {
-      document.exitFullscreen().catch(() => {});
-    }
-  };
-
-  // --- Custom Deck Creator Handlers ---
-  const handleOpenCreateDeck = (deckToEdit?: Deck) => {
-    soundFx.playTap();
-    if (deckToEdit) {
-      setEditingDeckId(deckToEdit.id);
-      setDeckFormTitle(deckToEdit.title);
-      setDeckFormDesc(deckToEdit.description);
-      setDeckFormIcon(deckToEdit.icon || '🎉');
-      setDeckFormColor(deckToEdit.color || COLOR_OPTIONS[0].value);
-      setDeckFormCategory(deckToEdit.category || 'Custom');
-      setDeckFormCardsText(deckToEdit.cards.join('\n'));
-    } else {
-      setEditingDeckId(null);
-      setDeckFormTitle('');
-      setDeckFormDesc('');
-      setDeckFormIcon('🎉');
-      setDeckFormColor(COLOR_OPTIONS[0].value);
-      setDeckFormCategory('Custom');
-      setDeckFormCardsText('');
-    }
-    setFormError(null);
-    setPhase('create-deck');
-  };
-
-  const handleSaveDeckForm = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!deckFormTitle.trim()) {
-      setFormError('Please provide a title for the deck.');
-      return;
-    }
-
-    // Split words by lines or commas
-    const parsedCards = deckFormCardsText
-      .split(/[\n,]/)
-      .map(w => w.trim())
-      .filter(w => w.length > 0);
-
-    if (parsedCards.length === 0) {
-      setFormError('Please add at least one word/card to your deck.');
-      return;
-    }
-
-    // Deduplicate while preserving case
-    const uniqueCards = Array.from(new Set(parsedCards));
-
-    const newDeck: Deck = {
-      id: editingDeckId || `custom-${Date.now()}`,
-      title: deckFormTitle.trim(),
-      description: deckFormDesc.trim() || `${uniqueCards.length} exciting cards`,
-      icon: deckFormIcon.trim() || '🎉',
-      color: deckFormColor,
-      category: deckFormCategory.trim() || 'Custom',
-      isCustom: true,
-      cards: uniqueCards,
-    };
-
-    const updated = saveOrUpdateDeck(newDeck);
-    setDecks(updated);
-    showToast(editingDeckId ? 'Deck updated successfully!' : 'Custom deck created!');
-    setPhase('home');
-  };
-
-  const handleDeleteDeck = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    soundFx.playTap();
-    if (confirm('Are you sure you want to delete this deck?')) {
-      const updated = deleteDeckById(id);
-      setDecks(updated);
-      showToast('Deck deleted.');
-    }
-  };
-
-  // --- JSON Data Storage & Editor Handlers ---
-  const handleOpenJsonEditor = () => {
-    soundFx.playTap();
-    setRawJsonText(exportDecksAsJSON(decks));
-    setJsonError(null);
-    setJsonSuccessMsg(null);
-    setPhase('json-editor');
-  };
-
-  const handleSaveRawJson = () => {
-    soundFx.playTap();
-    const result = importDecksFromJSON(rawJsonText);
-    if (!result.success || !result.decks) {
-      setJsonError(result.error || 'Failed to parse JSON.');
-      setJsonSuccessMsg(null);
-    } else {
-      setDecks(result.decks);
-      setJsonError(null);
-      setJsonSuccessMsg('All decks updated successfully from JSON!');
-      showToast('Decks saved from JSON!');
-    }
-  };
-
-  const handleCopyJson = async () => {
-    soundFx.playTap();
-    try {
-      await navigator.clipboard.writeText(rawJsonText);
-      showToast('JSON copied to clipboard!');
-    } catch {
-      showToast('Failed to copy to clipboard.');
-    }
-  };
-
-  const handleDownloadJsonBackup = () => {
-    soundFx.playTap();
-    const blob = new Blob([rawJsonText], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `guess-up-decks-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showToast('Backup file downloaded!');
-  };
-
-  const handleImportJsonFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = event => {
-      const text = event.target?.result as string;
-      if (text) {
-        setRawJsonText(text);
-        const result = importDecksFromJSON(text);
-        if (!result.success || !result.decks) {
-          setJsonError(`Invalid file format: ${result.error}`);
-        } else {
-          setDecks(result.decks);
-          setJsonError(null);
-          setJsonSuccessMsg(`Successfully imported ${result.decks.length} decks from file!`);
-          showToast(`Imported ${result.decks.length} decks!`);
-        }
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = '';
-  };
-
-  const handleResetFactoryDefaults = () => {
-    soundFx.playTap();
-    if (confirm('Reset all decks to original factory defaults? Any custom decks will be removed.')) {
-      const defaults = resetToFactoryDefaults();
-      setDecks(defaults);
-      setRawJsonText(exportDecksAsJSON(defaults));
-      setJsonSuccessMsg('Decks reset to factory defaults.');
-      showToast('Reset to defaults.');
-    }
-  };
-
-  // --- Score Calculation ---
-  const correctCount = useMemo(() => roundResults.filter(r => r.status === 'correct').length, [roundResults]);
-  const passedCount = useMemo(() => roundResults.filter(r => r.status === 'passed').length, [roundResults]);
-
-  const scoreRating = useMemo(() => {
-    if (correctCount >= 18) return { label: '🔥 Godlike Guessers!', desc: 'Mind-reading levels of party teamwork!' };
-    if (correctCount >= 12) return { label: '🏆 Party Legends!', desc: 'Outstanding speed and clues!' };
-    if (correctCount >= 8) return { label: '🌟 Great Performance!', desc: 'Super fun round, well played!' };
-    if (correctCount >= 4) return { label: '👏 Nice Effort!', desc: 'Getting warm! Warm up for another round!' };
-    return { label: '😄 Good Practice!', desc: 'Shake it off and try again!' };
-  }, [correctCount]);
-
-  const handleShareScore = async () => {
-    soundFx.playTap();
-    const shareText = `🎭 Guess Up! Result\nDeck: ${activeDeck?.title}\nScore: ${correctCount} Correct | ${passedCount} Passed in ${settings.roundDuration}s!\nPlay at: ${window.location.href}`;
-
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: 'Guess Up Score!',
-          text: shareText,
-          url: window.location.href,
-        });
-      } catch {
-        // user cancelled or share failed
-      }
-    } else {
-      try {
-        await navigator.clipboard.writeText(shareText);
-        showToast('Score copied to clipboard!');
-      } catch {
-        showToast('Could not share score.');
-      }
-    }
-  };
-
-  return (
-    <div className="app-container">
-      {/* Toast Notification */}
-      {toastMessage && <div className="toast-banner">{toastMessage}</div>}
-
-      {/* ======================================================== */}
-      {/* 1. HOME / DECK SELECTION SCREEN                           */}
-      {/* ======================================================== */}
-      {phase === 'home' && (
-        <div className="home-screen">
-          {/* Header */}
-          <header className="home-header">
-            <div className="brand-group">
-              <div className="brand-logo">🎉</div>
-              <div>
-                <h1 className="brand-title">Guess Up!</h1>
-                <p className="brand-subtitle">The Ultimate Heads Up Party Game</p>
-              </div>
-            </div>
-
-            <div className="header-actions">
-              <button
-                className="btn-pill btn-primary-gradient"
-                onClick={() => handleOpenCreateDeck()}
-                title="Create a new custom deck"
-              >
-                <span>➕</span> Custom Deck
-              </button>
-
-              <button
-                className="btn-icon"
-                onClick={handleOpenJsonEditor}
-                title="Decks Storage & JSON Editor"
-                aria-label="Decks Storage & JSON Editor"
-              >
-                📁
-              </button>
-
-              <button
-                className="btn-icon"
-                onClick={() => {
-                  soundFx.playTap();
-                  setPhase('settings');
-                }}
-                title="Game Settings"
-                aria-label="Game Settings"
-              >
-                ⚙️
-              </button>
-
-              <button
-                className="btn-icon"
-                onClick={toggleFullScreen}
-                title="Toggle Fullscreen"
-                aria-label="Toggle Fullscreen"
-              >
-                ⛶
-              </button>
-            </div>
-          </header>
-
-          {/* Quick Stats / Info Banner */}
-          <section className="info-banner">
-            <div className="info-badge">
-              <span className="badge-icon">⏱️</span>
-              <span>Round: <strong>{settings.roundDuration}s</strong></span>
-            </div>
-            <div className="info-badge">
-              <span className="badge-icon">📱</span>
-              <span>Tilt Down = <strong>Correct 🟢</strong></span>
-            </div>
-            <div className="info-badge">
-              <span className="badge-icon">🔄</span>
-              <span>Tilt Up = <strong>Pass 🟡</strong></span>
-            </div>
-          </section>
-
-          {/* Search & Category Filter */}
-          <section className="search-filter-bar">
-            <div className="search-box">
-              <span className="search-icon">🔍</span>
-              <input
-                type="text"
-                placeholder="Search decks & categories..."
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                className="search-input"
-              />
-              {searchQuery && (
-                <button className="clear-search" onClick={() => setSearchQuery('')}>
-                  ✕
-                </button>
-              )}
-            </div>
-
-            <div className="category-chips">
-              {categories.map(cat => (
-                <button
-                  key={cat}
-                  className={`chip ${selectedCategory === cat ? 'active' : ''}`}
-                  onClick={() => {
-                    soundFx.playTap();
-                    setSelectedCategory(cat);
-                  }}
-                >
-                  {cat}
-                </button>
-              ))}
-            </div>
-          </section>
-
-          {/* Decks Grid */}
-          <main className="decks-grid">
-            {filteredDecks.map(deck => (
-              <div
-                key={deck.id}
-                className="deck-card"
-                onClick={() => handleSelectDeck(deck)}
-                tabIndex={0}
-                role="button"
-                onKeyDown={e => e.key === 'Enter' && handleSelectDeck(deck)}
-              >
-                <div className={`deck-header-gradient bg-gradient-to-br ${deck.color || COLOR_OPTIONS[0].value}`}>
-                  <span className="deck-icon">{deck.icon || '🎉'}</span>
-                  {deck.isCustom && <span className="custom-tag">Custom</span>}
-                </div>
-
-                <div className="deck-body">
-                  <h3 className="deck-title">{deck.title}</h3>
-                  <p className="deck-desc">{deck.description}</p>
-
-                  <div className="deck-footer">
-                    <span className="deck-count">
-                      🃏 {deck.cards.length} cards
-                    </span>
-
-                    <div className="deck-buttons">
-                      {deck.isCustom && (
-                        <>
-                          <button
-                            className="btn-card-action"
-                            title="Edit Deck"
-                            onClick={e => {
-                              e.stopPropagation();
-                              handleOpenCreateDeck(deck);
-                            }}
-                          >
-                            ✏️
-                          </button>
-                          <button
-                            className="btn-card-action danger"
-                            title="Delete Deck"
-                            onClick={e => handleDeleteDeck(deck.id, e)}
-                          >
-                            🗑️
-                          </button>
-                        </>
-                      )}
-                      <button className="btn-play">
-                        Play ▶
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-
-            {filteredDecks.length === 0 && (
-              <div className="empty-state">
-                <div className="empty-icon">🔍</div>
-                <h3>No decks found</h3>
-                <p>Try searching for something else or create your own custom deck!</p>
-                <button className="btn-primary" onClick={() => handleOpenCreateDeck()}>
-                  ➕ Create New Deck
-                </button>
-              </div>
-            )}
-          </main>
-        </div>
-      )}
-
-      {/* ======================================================== */}
-      {/* 2. PRE-ROUND COUNTDOWN / PLACE ON FOREHEAD SCREEN         */}
-      {/* ======================================================== */}
-      {phase === 'countdown' && activeDeck && (
-        <div className="countdown-screen">
-          <div className="countdown-card">
-            <div className="forehead-illustration">
-              <div className="phone-icon-anim">📱</div>
-              <div className="pulse-waves"></div>
-            </div>
-
-            <h2 className="countdown-prompt">Place phone on your forehead!</h2>
-            <p className="countdown-deck-title">Deck: <strong>{activeDeck.title}</strong></p>
-
-            <div className="countdown-number-box">
-              <span className="countdown-number">{countdown > 0 ? countdown : 'GO!'}</span>
-            </div>
-
-            <div className="countdown-hints">
-              <div className="hint-pill correct">
-                <span>🟢</span> Nod Down = <strong>CORRECT</strong>
-              </div>
-              <div className="hint-pill pass">
-                <span>🟡</span> Tilt Up = <strong>PASS</strong>
-              </div>
-            </div>
-
-            {!gyroPermission && gyroSupported && (
-              <button
-                className="btn-permission"
-                onClick={async () => {
-                  await requestPermission();
-                }}
-              >
-                🔔 Enable Motion Sensor (iOS)
-              </button>
-            )}
-
-            <button
-              className="btn-cancel"
-              onClick={() => {
-                soundFx.playTap();
-                setPhase('home');
-              }}
-            >
-              Cancel Round
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ======================================================== */}
-      {/* 3. ACTIVE GAMEPLAY SCREEN                                 */}
-      {/* ======================================================== */}
-      {phase === 'playing' && activeDeck && (
-        <div className={`gameplay-screen ${flashFeedback ? `flash-${flashFeedback}` : ''}`}>
-          {/* Top HUD */}
-          <div className="game-hud">
-            <div className="hud-left">
-              <div className="timer-badge">
-                <span className="timer-icon">⏱️</span>
-                <span className={`timer-val ${timeLeft <= 10 ? 'urgent' : ''}`}>{timeLeft}s</span>
-              </div>
-              <div className="score-badge">
-                <span className="score-icon">🟢</span>
-                <span className="score-val">{correctCount}</span>
-              </div>
-            </div>
-
-            <div className="hud-center">
-              <span className="deck-badge">{activeDeck.icon} {activeDeck.title}</span>
-            </div>
-
-            <div className="hud-right">
-              <button
-                className="btn-hud"
-                onClick={() => setIsPaused(p => !p)}
-                title={isPaused ? 'Resume' : 'Pause'}
-              >
-                {isPaused ? '▶ Resume' : '⏸ Pause'}
-              </button>
-              <button
-                className="btn-hud danger"
-                onClick={() => {
-                  soundFx.playTimeUpSound();
-                  setPhase('gameover');
-                }}
-                title="Finish Round"
-              >
-                Finish ⏹
-              </button>
-            </div>
-          </div>
-
-          {/* Pause Overlay */}
-          {isPaused && (
-            <div className="pause-overlay">
-              <h2>⏸ Game Paused</h2>
-              <p>Press Space or tap Resume to continue.</p>
-              <button className="btn-primary" onClick={() => setIsPaused(false)}>
-                Resume Game
-              </button>
-            </div>
-          )}
-
-          {/* Word Card Display */}
-          <div className="card-stage">
-            <div className="word-card-container">
-              <div className="word-card">
-                <h1 className="target-word">
-                  {deckCards[currentCardIndex] || 'All Done!'}
-                </h1>
-                <p className="card-progress">
-                  Card {currentCardIndex + 1} of {deckCards.length}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Touch Zones / Visual Action Guides */}
-          <div className="touch-zones">
-            <div
-              className="touch-zone pass-zone"
-              onClick={() => handleCardAnswer('pass')}
-            >
-              <div className="zone-indicator">
-                <span className="zone-icon">🟡</span>
-                <span className="zone-text">PASS</span>
-                <span className="zone-sub">(Tap Left / Tilt Up)</span>
-              </div>
-            </div>
-
-            <div
-              className="touch-zone correct-zone"
-              onClick={() => handleCardAnswer('correct')}
-            >
-              <div className="zone-indicator">
-                <span className="zone-icon">🟢</span>
-                <span className="zone-text">CORRECT</span>
-                <span className="zone-sub">(Tap Right / Tilt Down)</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ======================================================== */}
-      {/* 4. GAME OVER & ROUND SUMMARY SCREEN                       */}
-      {/* ======================================================== */}
-      {phase === 'gameover' && activeDeck && (
-        <div className="gameover-screen">
-          <div className="gameover-container">
-            <div className="results-header">
-              <div className="score-ring">
-                <span className="score-huge">{correctCount}</span>
-                <span className="score-label">POINTS</span>
-              </div>
-
-              <h2 className="rating-title">{scoreRating.label}</h2>
-              <p className="rating-desc">{scoreRating.desc}</p>
-              <p className="deck-played-title">Deck: <strong>{activeDeck.icon} {activeDeck.title}</strong></p>
-            </div>
-
-            {/* Quick Stats Grid */}
-            <div className="stats-row">
-              <div className="stat-card correct">
-                <span className="stat-icon">🟢</span>
-                <span className="stat-num">{correctCount}</span>
-                <span className="stat-name">Correct</span>
-              </div>
-              <div className="stat-card passed">
-                <span className="stat-icon">🟡</span>
-                <span className="stat-num">{passedCount}</span>
-                <span className="stat-name">Passed</span>
-              </div>
-              <div className="stat-card total">
-                <span className="stat-icon">🃏</span>
-                <span className="stat-num">{roundResults.length}</span>
-                <span className="stat-name">Total Seen</span>
-              </div>
-            </div>
-
-            {/* Filter Tabs for Answers */}
-            <div className="results-tab-bar">
-              <button
-                className={`tab-btn ${resultsFilter === 'all' ? 'active' : ''}`}
-                onClick={() => setResultsFilter('all')}
-              >
-                All Cards ({roundResults.length})
-              </button>
-              <button
-                className={`tab-btn ${resultsFilter === 'correct' ? 'active' : ''}`}
-                onClick={() => setResultsFilter('correct')}
-              >
-                Correct ({correctCount})
-              </button>
-              <button
-                className={`tab-btn ${resultsFilter === 'passed' ? 'active' : ''}`}
-                onClick={() => setResultsFilter('passed')}
-              >
-                Passed ({passedCount})
-              </button>
-            </div>
-
-            {/* Cards List Breakdown */}
-            <div className="results-card-list">
-              {roundResults
-                .filter(r => resultsFilter === 'all' || r.status === resultsFilter)
-                .map((item, idx) => (
-                  <div key={idx} className={`result-item ${item.status}`}>
-                    <span className="result-status-icon">
-                      {item.status === 'correct' ? '✅' : '⏭️'}
-                    </span>
-                    <span className="result-word-text">{item.text}</span>
-                    <span className="result-tag">{item.status.toUpperCase()}</span>
-                  </div>
-                ))}
-              {roundResults.length === 0 && (
-                <div className="no-results-msg">No cards were answered in this round.</div>
-              )}
-            </div>
-
-            {/* Action Buttons */}
-            <div className="results-actions">
-              <button
-                className="btn-action-primary"
-                onClick={() => handleSelectDeck(activeDeck)}
-              >
-                🔄 Play Again
-              </button>
-
-              <button
-                className="btn-action-secondary"
-                onClick={() => {
-                  soundFx.playTap();
-                  setPhase('home');
-                }}
-              >
-                🏠 Choose Deck
-              </button>
-
-              <button
-                className="btn-action-share"
-                onClick={handleShareScore}
-              >
-                📤 Share Score
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ======================================================== */}
-      {/* 5. CUSTOM DECK CREATOR MODAL                             */}
-      {/* ======================================================== */}
-      {phase === 'create-deck' && (
-        <div className="modal-backdrop">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h2>{editingDeckId ? '✏️ Edit Custom Deck' : '✨ Create Custom Deck'}</h2>
-              <button
-                className="btn-close"
-                onClick={() => {
-                  soundFx.playTap();
-                  setPhase('home');
-                }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveDeckForm} className="deck-form">
-              {formError && <div className="form-error-banner">{formError}</div>}
-
-              <div className="form-group">
-                <label>Deck Title *</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  placeholder="e.g. 90s Disney Characters, Marvel Heroes, Inside Jokes"
-                  value={deckFormTitle}
-                  onChange={e => setDeckFormTitle(e.target.value)}
-                  maxLength={50}
-                  required
-                />
-              </div>
-
-              <div className="form-row">
-                <div className="form-group">
-                  <label>Emoji Icon</label>
-                  <div className="emoji-picker-group">
-                    <input
-                      type="text"
-                      className="form-input icon-input"
-                      value={deckFormIcon}
-                      onChange={e => setDeckFormIcon(e.target.value)}
-                      maxLength={4}
-                    />
-                    <div className="emoji-presets">
-                      {EMOJI_PRESETS.map(em => (
-                        <button
-                          type="button"
-                          key={em}
-                          className="emoji-btn"
-                          onClick={() => setDeckFormIcon(em)}
-                        >
-                          {em}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label>Category</label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="e.g. Friends, Family, Party, Anime"
-                    value={deckFormCategory}
-                    onChange={e => setDeckFormCategory(e.target.value)}
-                    maxLength={25}
-                  />
-                </div>
-              </div>
-
-              <div className="form-group">
-                <label>Color Theme</label>
-                <div className="color-grid">
-                  {COLOR_OPTIONS.map(c => (
-                    <button
-                      type="button"
-                      key={c.name}
-                      className={`color-chip bg-gradient-to-r ${c.value} ${
-                        deckFormColor === c.value ? 'selected' : ''
-                      }`}
-                      onClick={() => setDeckFormColor(c.value)}
-                      title={c.name}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div className="form-group">
-                <label>Description</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  placeholder="Short summary for your deck"
-                  value={deckFormDesc}
-                  onChange={e => setDeckFormDesc(e.target.value)}
-                  maxLength={100}
-                />
-              </div>
-
-              <div className="form-group">
-                <div className="label-with-count">
-                  <label>Cards / Words List *</label>
-                  <span className="words-counter">
-                    {deckFormCardsText.split(/[\n,]/).filter(s => s.trim().length > 0).length} cards added
-                  </span>
-                </div>
-                <p className="form-hint">
-                  Enter words or phrases separated by a new line or commas.
-                </p>
-                <textarea
-                  className="form-textarea"
-                  rows={6}
-                  placeholder={`Woody\nBuzz Lightyear\nMr. Potato Head\nRex\nSlinky Dog`}
-                  value={deckFormCardsText}
-                  onChange={e => setDeckFormCardsText(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div className="modal-footer">
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => {
-                    soundFx.playTap();
-                    setPhase('home');
-                  }}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="btn-primary">
-                  💾 Save Deck
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ======================================================== */}
-      {/* 6. RAW JSON DECK STORAGE & EDITOR MODAL                  */}
-      {/* ======================================================== */}
-      {phase === 'json-editor' && (
-        <div className="modal-backdrop">
-          <div className="modal-content json-modal">
-            <div className="modal-header">
-              <div>
-                <h2>📁 Decks Storage & JSON Editor</h2>
-                <p className="modal-subtitle">
-                  Edit, backup, or import all your decks directly in raw JSON format.
-                </p>
-              </div>
-              <button
-                className="btn-close"
-                onClick={() => {
-                  soundFx.playTap();
-                  setPhase('home');
-                }}
-              >
-                ✕
-              </button>
-            </div>
-
-            {jsonError && <div className="form-error-banner">❌ {jsonError}</div>}
-            {jsonSuccessMsg && <div className="form-success-banner">✅ {jsonSuccessMsg}</div>}
-
-            <div className="json-toolbar">
-              <button className="btn-tool" onClick={handleCopyJson} title="Copy JSON">
-                📋 Copy
-              </button>
-              <button className="btn-tool" onClick={handleDownloadJsonBackup} title="Download Backup">
-                📥 Download Backup (.json)
-              </button>
-              <label className="btn-tool file-btn" title="Import JSON File">
-                📤 Import File
-                <input type="file" accept=".json" onChange={handleImportJsonFile} style={{ display: 'none' }} />
-              </label>
-              <button className="btn-tool danger" onClick={handleResetFactoryDefaults} title="Reset to Defaults">
-                🔄 Reset Defaults
-              </button>
-            </div>
-
-            <div className="json-editor-container">
-              <textarea
-                className="json-textarea"
-                value={rawJsonText}
-                onChange={e => {
-                  setRawJsonText(e.target.value);
-                  setJsonError(null);
-                  setJsonSuccessMsg(null);
-                }}
-                rows={16}
-                spellCheck={false}
-              />
-            </div>
-
-            <div className="modal-footer">
-              <button
-                className="btn-secondary"
-                onClick={() => {
-                  soundFx.playTap();
-                  setPhase('home');
-                }}
-              >
-                Close
-              </button>
-              <button className="btn-primary" onClick={handleSaveRawJson}>
-                💾 Save & Apply JSON Changes
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ======================================================== */}
-      {/* 7. SETTINGS MODAL                                        */}
-      {/* ======================================================== */}
-      {phase === 'settings' && (
-        <div className="modal-backdrop">
-          <div className="modal-content settings-modal">
-            <div className="modal-header">
-              <h2>⚙️ Game Settings</h2>
-              <button
-                className="btn-close"
-                onClick={() => {
-                  soundFx.playTap();
-                  setPhase('home');
-                }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="settings-body">
-              {/* Round Duration */}
-              <div className="setting-row">
-                <div>
-                  <label className="setting-label">Round Duration</label>
-                  <p className="setting-desc">How many seconds each round lasts</p>
-                </div>
-                <div className="setting-options">
-                  {[30, 60, 90, 120].map(dur => (
-                    <button
-                      key={dur}
-                      className={`btn-option ${settings.roundDuration === dur ? 'active' : ''}`}
-                      onClick={() => {
-                        soundFx.playTap();
-                        setSettings(s => ({ ...s, roundDuration: dur }));
-                      }}
-                    >
-                      {dur}s
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Sound FX Toggle */}
-              <div className="setting-row">
-                <div>
-                  <label className="setting-label">Sound Effects</label>
-                  <p className="setting-desc">Chimes, countdown beeps, and buzzer</p>
-                </div>
-                <button
-                  className={`toggle-switch ${settings.soundEnabled ? 'on' : 'off'}`}
-                  onClick={() => {
-                    setSettings(s => {
-                      const next = !s.soundEnabled;
-                      soundFx.enabled = next;
-                      if (next) soundFx.playCorrectSound();
-                      return { ...s, soundEnabled: next };
-                    });
-                  }}
-                >
-                  <span className="toggle-slider"></span>
-                  <span className="toggle-label">{settings.soundEnabled ? 'ON' : 'OFF'}</span>
-                </button>
-              </div>
-
-              {/* Haptic Vibrations */}
-              <div className="setting-row">
-                <div>
-                  <label className="setting-label">Haptic Vibration</label>
-                  <p className="setting-desc">Vibrate phone on correct / pass tilt</p>
-                </div>
-                <button
-                  className={`toggle-switch ${settings.hapticsEnabled ? 'on' : 'off'}`}
-                  onClick={() => {
-                    soundFx.playTap();
-                    setSettings(s => ({ ...s, hapticsEnabled: !s.hapticsEnabled }));
-                  }}
-                >
-                  <span className="toggle-slider"></span>
-                  <span className="toggle-label">{settings.hapticsEnabled ? 'ON' : 'OFF'}</span>
-                </button>
-              </div>
-
-              {/* Tilt Sensitivity */}
-              <div className="setting-row">
-                <div>
-                  <label className="setting-label">Motion Tilt Sensitivity</label>
-                  <p className="setting-desc">Adjust how far to nod for tilt detection</p>
-                </div>
-                <div className="setting-options">
-                  {(['low', 'medium', 'high'] as const).map(sens => (
-                    <button
-                      key={sens}
-                      className={`btn-option ${settings.tiltSensitivity === sens ? 'active' : ''}`}
-                      onClick={() => {
-                        soundFx.playTap();
-                        setSettings(s => ({ ...s, tiltSensitivity: sens }));
-                      }}
-                    >
-                      {sens.toUpperCase()}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Gyroscope Status */}
-              <div className="gyro-status-box">
-                <span className="gyro-icon">{gyroSupported ? '✅' : 'ℹ️'}</span>
-                <span>
-                  {gyroSupported
-                    ? 'Device Orientation & Gyroscope supported on your device.'
-                    : 'Device Orientation not detected (use screen touch buttons or keyboard).'}
-                </span>
-              </div>
-            </div>
-
-            <div className="modal-footer">
-              <button
-                className="btn-primary"
-                onClick={() => {
-                  soundFx.playTap();
-                  setPhase('home');
-                }}
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ALL_DECKS as FALLBACK_DECKS } from './decks'
+import type { Deck } from './decks'
+
+export type { Deck }
+
+type Phase = 'home' | 'ready' | 'countdown' | 'play' | 'results' | 'editor' | 'settings'
+type Result = { word: string; got: boolean }
+type Settings = { seconds: number; sound: boolean; tilt: boolean }
+type TiltPermission = 'unknown' | 'unsupported' | 'granted' | 'denied'
+
+/* ------------------------------------------------------------------ *
+ * Constants + storage
+ * ------------------------------------------------------------------ */
+
+const KEY_DECKS = 'guessup:decks:v1'
+const KEY_SETTINGS = 'guessup:settings:v1'
+const KEY_BEST = 'guessup:best:v1'
+
+const DEFAULT_SETTINGS: Settings = { seconds: 60, sound: true, tilt: true }
+
+const SWATCHES = [
+  '#E8453C', '#F0803C', '#F2B705', '#1E9E6A',
+  '#0E9BA6', '#2563EB', '#8B5CF6', '#D6336C',
+]
+
+function load<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as T) : fallback
+  } catch {
+    return fallback
+  }
 }
 
-export default App;
+function store(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    /* storage full or blocked - the game still works for this session */
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Sound (Web Audio, no assets)
+ * ------------------------------------------------------------------ */
+
+let audioCtx: AudioContext | null = null
+
+function tone(freq: number, duration = 0.12, type: OscillatorType = 'sine', volume = 0.22) {
+  try {
+    if (!audioCtx) {
+      const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+      audioCtx = new Ctor()
+    }
+    if (audioCtx.state === 'suspended') void audioCtx.resume()
+    const now = audioCtx.currentTime
+    const osc = audioCtx.createOscillator()
+    const gain = audioCtx.createGain()
+    osc.type = type
+    osc.frequency.setValueAtTime(freq, now)
+    gain.gain.setValueAtTime(0.0001, now)
+    gain.gain.exponentialRampToValueAtTime(volume, now + 0.012)
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration)
+    osc.connect(gain).connect(audioCtx.destination)
+    osc.start(now)
+    osc.stop(now + duration + 0.03)
+  } catch {
+    /* audio is a nicety, never a blocker */
+  }
+}
+
+const SFX = {
+  correct: () => {
+    tone(680, 0.09, 'triangle')
+    window.setTimeout(() => tone(1020, 0.14, 'triangle'), 85)
+  },
+  pass: () => tone(190, 0.2, 'sawtooth', 0.16),
+  tick: () => tone(900, 0.05, 'square', 0.1),
+  go: () => tone(560, 0.16, 'triangle'),
+  end: () => {
+    tone(320, 0.22, 'sawtooth', 0.2)
+    window.setTimeout(() => tone(190, 0.4, 'sawtooth', 0.2), 190)
+  },
+}
+
+function buzz(pattern: number | number[]) {
+  try {
+    navigator.vibrate?.(pattern)
+  } catch {
+    /* not supported */
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Tilt
+ *
+ * z = cos(beta) * cos(gamma) is the vertical component of the screen
+ * normal in world space:  +1 screen faces the sky, -1 screen faces the
+ * floor, 0 screen is vertical (the forehead position). It is derived
+ * from the full rotation matrix, so it behaves the same in portrait and
+ * landscape and ignores compass heading.
+ * ------------------------------------------------------------------ */
+
+const TRIGGER = 0.62
+const NEUTRAL = 0.34
+
+async function askTiltPermission(): Promise<TiltPermission> {
+  const DOE = (window as unknown as { DeviceOrientationEvent?: { requestPermission?: () => Promise<string> } }).DeviceOrientationEvent
+  if (!DOE) return 'unsupported'
+  if (typeof DOE.requestPermission === 'function') {
+    try {
+      const result = await DOE.requestPermission()
+      return result === 'granted' ? 'granted' : 'denied'
+    } catch {
+      return 'denied'
+    }
+  }
+  return 'granted'
+}
+
+function useOrientation(active: boolean, onZ: (z: number) => void) {
+  const cb = useRef(onZ)
+  cb.current = onZ
+
+  useEffect(() => {
+    if (!active) return
+    const handler = (event: DeviceOrientationEvent) => {
+      if (event.beta == null || event.gamma == null) return
+      const beta = (event.beta * Math.PI) / 180
+      const gamma = (event.gamma * Math.PI) / 180
+      cb.current(Math.cos(beta) * Math.cos(gamma))
+    }
+    window.addEventListener('deviceorientation', handler)
+    return () => window.removeEventListener('deviceorientation', handler)
+  }, [active])
+}
+
+/* ------------------------------------------------------------------ *
+ * Small helpers
+ * ------------------------------------------------------------------ */
+
+function shuffle<T>(items: T[]): T[] {
+  const copy = items.slice()
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[copy[i], copy[j]] = [copy[j], copy[i]]
+  }
+  return copy
+}
+
+function wordSize(word: string) {
+  const n = word.length
+  if (n <= 9) return 'clamp(3.2rem, 17vw, 13rem)'
+  if (n <= 15) return 'clamp(2.6rem, 12vw, 9rem)'
+  if (n <= 24) return 'clamp(2.1rem, 8.5vw, 6rem)'
+  return 'clamp(1.7rem, 6.5vw, 4.2rem)'
+}
+
+/** Picks black or white text for a background colour, using WCAG luminance. */
+function readable(hex: string) {
+  const clean = hex.replace('#', '')
+  const full = clean.length === 3 ? clean.split('').map((c) => c + c).join('') : clean
+  const value = parseInt(full, 16)
+  if (full.length !== 6 || Number.isNaN(value)) return '#ffffff'
+  const [r, g, b] = [(value >> 16) & 255, (value >> 8) & 255, value & 255].map((channel) => {
+    const s = channel / 255
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.42 ? '#0f1320' : '#ffffff'
+}
+
+/** Background + matching text colour, for anything painted in a deck colour. */
+const skin = (hex: string) => ({ background: hex, color: readable(hex) })
+
+function slug(name: string) {
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '') || 'deck'
+  )
+}
+
+function downloadJSON(filename: string, data: unknown) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+async function enterImmersive() {
+  try {
+    await document.documentElement.requestFullscreen?.()
+  } catch {
+    /* denied or unsupported */
+  }
+  try {
+    await (screen.orientation as unknown as { lock?: (o: string) => Promise<void> })?.lock?.('landscape')
+  } catch {
+    /* orientation lock needs fullscreen on some browsers */
+  }
+}
+
+function exitImmersive() {
+  try {
+    ;(screen.orientation as unknown as { unlock?: () => void })?.unlock?.()
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (document.fullscreenElement) void document.exitFullscreen()
+  } catch {
+    /* ignore */
+  }
+}
+
+let wakeLock: { release: () => Promise<void> } | null = null
+
+async function keepScreenAwake(on: boolean) {
+  try {
+    const wl = (navigator as unknown as { wakeLock?: { request: (t: 'screen') => Promise<{ release: () => Promise<void> }> } }).wakeLock
+    if (on) {
+      if (!wakeLock && wl) wakeLock = await wl.request('screen')
+    } else if (wakeLock) {
+      await wakeLock.release()
+      wakeLock = null
+    }
+  } catch {
+    /* not supported */
+  }
+}
+
+function normaliseDecks(raw: unknown): Deck[] {
+  const list = Array.isArray(raw)
+    ? raw
+    : Array.isArray((raw as { decks?: unknown[] })?.decks)
+      ? (raw as { decks: unknown[] }).decks
+      : []
+  return list
+    .map((item, index) => {
+      const d = item as Partial<Deck>
+      return {
+        id: String(d.id ?? `deck-${index}`),
+        name: String(d.name ?? 'Untitled deck'),
+        emoji: String(d.emoji ?? '🃏'),
+        color: String(d.color ?? SWATCHES[index % SWATCHES.length]),
+        description: d.description ? String(d.description) : '',
+        words: Array.isArray(d.words) ? d.words.map(String).filter((w) => w.trim().length > 0) : [],
+      }
+    })
+    .filter((d) => d.words.length > 0)
+}
+
+/* ------------------------------------------------------------------ *
+ * App
+ * ------------------------------------------------------------------ */
+
+export default function App() {
+  const [builtIn, setBuiltIn] = useState<Deck[]>([])
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [custom, setCustom] = useState<Deck[]>(() => load<Deck[]>(KEY_DECKS, []))
+  const [settings, setSettings] = useState<Settings>(() => ({ ...DEFAULT_SETTINGS, ...load<Partial<Settings>>(KEY_SETTINGS, {}) }))
+  const [best, setBest] = useState<Record<string, number>>(() => load<Record<string, number>>(KEY_BEST, {}))
+
+  const [phase, setPhase] = useState<Phase>('home')
+  const [deck, setDeck] = useState<Deck | null>(null)
+  const [editing, setEditing] = useState<Deck | null>(null)
+
+  const [queue, setQueue] = useState<string[]>([])
+  const [index, setIndex] = useState(0)
+  const [results, setResults] = useState<Result[]>([])
+  const [timeLeft, setTimeLeft] = useState(settings.seconds)
+  const [countdown, setCountdown] = useState(3)
+  const [flash, setFlash] = useState<'correct' | 'pass' | null>(null)
+
+  const [tiltPermission, setTiltPermission] = useState<TiltPermission>('unknown')
+  const [tiltZ, setTiltZ] = useState<number | null>(null)
+
+  const phaseRef = useRef(phase)
+  phaseRef.current = phase
+  const flashRef = useRef(flash)
+  flashRef.current = flash
+  const armedRef = useRef(false)
+  const lastSampleRef = useRef(0)
+  const soundRef = useRef(settings.sound)
+  soundRef.current = settings.sound
+  const queueRef = useRef(queue)
+  queueRef.current = queue
+  const indexRef = useRef(index)
+  indexRef.current = index
+
+  const decks = useMemo(() => [...builtIn, ...custom], [builtIn, custom])
+  const word = queue[index] ?? ''
+
+  const play = useCallback((name: keyof typeof SFX) => {
+    if (soundRef.current) SFX[name]()
+  }, [])
+
+  /* ---- work out whether motion access needs an explicit prompt ---- */
+  useEffect(() => {
+    const DOE = (window as unknown as { DeviceOrientationEvent?: { requestPermission?: () => Promise<string> } })
+      .DeviceOrientationEvent
+    if (!DOE) setTiltPermission('unsupported')
+    else if (typeof DOE.requestPermission !== 'function') setTiltPermission('granted')
+  }, [])
+
+  /* ---- load decks.json ---- */
+  useEffect(() => {
+    let cancelled = false
+    fetch(`${import.meta.env.BASE_URL}decks.json`, { cache: 'no-cache' })
+      .then((res) => {
+        if (!res.ok) throw new Error(String(res.status))
+        return res.json()
+      })
+      .then((data) => {
+        if (cancelled) return
+        const parsed = normaliseDecks(data)
+        setBuiltIn(parsed.length ? parsed : FALLBACK_DECKS)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setBuiltIn(FALLBACK_DECKS)
+        setLoadFailed(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  /* ---- persist ---- */
+  useEffect(() => store(KEY_DECKS, custom), [custom])
+  useEffect(() => store(KEY_SETTINGS, settings), [settings])
+  useEffect(() => store(KEY_BEST, best), [best])
+
+  /* ---- round flow ---- */
+
+  const finish = useCallback(() => {
+    play('end')
+    buzz([120, 60, 120])
+    setFlash(null)
+    setPhase('results')
+    void keepScreenAwake(false)
+    exitImmersive()
+  }, [play])
+
+  const finishRef = useRef(finish)
+  finishRef.current = finish
+
+  const nextWord = useCallback(() => {
+    const next = indexRef.current + 1
+    if (next < queueRef.current.length) {
+      setIndex(next)
+    } else {
+      setQueue(shuffle(queueRef.current))
+      setIndex(0)
+    }
+  }, [])
+
+  const nextWordRef = useRef(nextWord)
+  nextWordRef.current = nextWord
+
+  const answer = useCallback(
+    (got: boolean) => {
+      if (phaseRef.current !== 'play' || flashRef.current) return
+      const current = queue[index]
+      if (!current) return
+      setResults((r) => [...r, { word: current, got }])
+      play(got ? 'correct' : 'pass')
+      buzz(got ? 45 : [20, 50, 20])
+      setFlash(got ? 'correct' : 'pass')
+      flashRef.current = got ? 'correct' : 'pass'
+      window.setTimeout(() => {
+        setFlash(null)
+        flashRef.current = null
+        nextWordRef.current()
+      }, 700)
+    },
+    [index, queue, play],
+  )
+
+  const answerRef = useRef(answer)
+  answerRef.current = answer
+
+  /* ---- one orientation listener for the whole app ---- */
+  useOrientation(settings.tilt && tiltPermission === 'granted', (z) => {
+    const stage = phaseRef.current
+    if (stage === 'ready') {
+      const now = Date.now()
+      if (now - lastSampleRef.current > 80) {
+        lastSampleRef.current = now
+        setTiltZ(z)
+      }
+      return
+    }
+    if (stage !== 'play') return
+    if (armedRef.current) {
+      if (z < -TRIGGER) {
+        armedRef.current = false
+        answerRef.current(true)
+      } else if (z > TRIGGER) {
+        armedRef.current = false
+        answerRef.current(false)
+      }
+    } else if (Math.abs(z) < NEUTRAL) {
+      armedRef.current = true
+    }
+  })
+
+  /* ---- keyboard ---- */
+  useEffect(() => {
+    if (phase !== 'play') return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowDown' || event.key === ' ' || event.key === 'Enter') {
+        event.preventDefault()
+        answerRef.current(true)
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        answerRef.current(false)
+      } else if (event.key === 'Escape') {
+        finishRef.current()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [phase])
+
+  /* ---- countdown ---- */
+  useEffect(() => {
+    if (phase !== 'countdown') return
+    setCountdown(3)
+    play('tick')
+    let value = 3
+    const id = window.setInterval(() => {
+      value -= 1
+      setCountdown(value)
+      if (value > 0) play('tick')
+      if (value <= 0) {
+        window.clearInterval(id)
+        play('go')
+        armedRef.current = false
+        setPhase('play')
+      }
+    }, 900)
+    return () => window.clearInterval(id)
+  }, [phase, play])
+
+  /* ---- round timer ---- */
+  useEffect(() => {
+    if (phase !== 'play') return
+    const deadline = Date.now() + settings.seconds * 1000
+    let shown = settings.seconds
+    setTimeLeft(settings.seconds)
+    const id = window.setInterval(() => {
+      const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
+      if (left !== shown) {
+        shown = left
+        setTimeLeft(left)
+        if (left > 0 && left <= 5) play('tick')
+      }
+      if (left <= 0) {
+        window.clearInterval(id)
+        finishRef.current()
+      }
+    }, 100)
+    return () => window.clearInterval(id)
+  }, [phase, settings.seconds, play])
+
+  /* ---- record best score ---- */
+  useEffect(() => {
+    if (phase !== 'results' || !deck) return
+    const score = results.filter((r) => r.got).length
+    setBest((prev) => (score > (prev[deck.id] ?? 0) ? { ...prev, [deck.id]: score } : prev))
+  }, [phase, deck, results])
+
+  /* ---- actions ---- */
+
+  const openDeck = (chosen: Deck) => {
+    setDeck(chosen)
+    setTiltZ(null)
+    setPhase('ready')
+  }
+
+  const startRound = async () => {
+    if (!deck) return
+    void enterImmersive()
+    if (settings.tilt && tiltPermission === 'unknown') {
+      const result = await askTiltPermission()
+      setTiltPermission(result)
+    }
+    setQueue(shuffle(deck.words))
+    setIndex(0)
+    setResults([])
+    setFlash(null)
+    flashRef.current = null
+    armedRef.current = false
+    void keepScreenAwake(true)
+    setPhase('countdown')
+  }
+
+  const enableTilt = async () => {
+    const result = await askTiltPermission()
+    setTiltPermission(result)
+    if (result !== 'granted') setSettings((s) => ({ ...s, tilt: result !== 'unsupported' ? s.tilt : false }))
+  }
+
+  const backHome = () => {
+    void keepScreenAwake(false)
+    exitImmersive()
+    setPhase('home')
+    setDeck(null)
+  }
+
+  const saveDeck = (next: Deck) => {
+    setCustom((list) => {
+      const exists = list.some((d) => d.id === next.id)
+      return exists ? list.map((d) => (d.id === next.id ? next : d)) : [...list, next]
+    })
+    setEditing(null)
+    setPhase('home')
+  }
+
+  const deleteDeck = (id: string) => {
+    setCustom((list) => list.filter((d) => d.id !== id))
+    setEditing(null)
+    setPhase('home')
+  }
+
+  const tapAnswer = (event: React.PointerEvent<HTMLDivElement>) => {
+    const box = event.currentTarget.getBoundingClientRect()
+    const ratio = (event.clientY - box.top) / box.height
+    if (ratio < 0.42) answerRef.current(false)
+    else if (ratio > 0.58) answerRef.current(true)
+  }
+
+  /* ---- render ---- */
+
+  const score = results.filter((r) => r.got).length
+
+  if (phase === 'countdown') {
+    return (
+      <main className="stage" style={deck ? skin(deck.color) : undefined}>
+        <div className="count" key={countdown}>
+          {countdown > 0 ? countdown : 'GO'}
+        </div>
+      </main>
+    )
+  }
+
+  if (phase === 'play') {
+    return (
+      <main
+        className={`stage play${flash ? ` flash-${flash}` : ''}`}
+        style={flash || !deck ? undefined : skin(deck.color)}
+        onPointerDown={tapAnswer}
+      >
+        {flash ? (
+          <div className="verdict">
+            <span className="verdict-arrow">{flash === 'correct' ? '▼' : '▲'}</span>
+            <span className="verdict-text">{flash === 'correct' ? 'Got it' : 'Pass'}</span>
+          </div>
+        ) : (
+          <>
+            <div className="zone zone-top">▲ Pass</div>
+            <div className="word" style={{ fontSize: wordSize(word) }}>
+              {word}
+            </div>
+            <div className="zone zone-bottom">▼ Got it</div>
+            <div className={`clock${timeLeft <= 5 ? ' urgent' : ''}`}>{timeLeft}</div>
+            <div className="tally">{score}</div>
+          </>
+        )}
+      </main>
+    )
+  }
+
+  if (phase === 'ready' && deck) {
+    return (
+      <ReadyScreen
+        deck={deck}
+        settings={settings}
+        tiltPermission={tiltPermission}
+        tiltZ={tiltZ}
+        onEnableTilt={enableTilt}
+        onStart={startRound}
+        onBack={backHome}
+      />
+    )
+  }
+
+  if (phase === 'results' && deck) {
+    return (
+      <ResultsScreen
+        deck={deck}
+        results={results}
+        best={best[deck.id] ?? 0}
+        onToggle={(i) => setResults((r) => r.map((item, idx) => (idx === i ? { ...item, got: !item.got } : item)))}
+        onAgain={() => setPhase('ready')}
+        onHome={backHome}
+      />
+    )
+  }
+
+  if (phase === 'editor') {
+    return (
+      <EditorScreen
+        deck={editing}
+        onSave={saveDeck}
+        onDelete={editing ? () => deleteDeck(editing.id) : undefined}
+        onCancel={() => {
+          setEditing(null)
+          setPhase('home')
+        }}
+      />
+    )
+  }
+
+  if (phase === 'settings') {
+    return (
+      <SettingsScreen
+        settings={settings}
+        tiltPermission={tiltPermission}
+        decks={decks}
+        custom={custom}
+        onChange={(patch) => setSettings((s) => ({ ...s, ...patch }))}
+        onEnableTilt={enableTilt}
+        onImport={(imported) => setCustom((list) => [...list, ...imported])}
+        onClearBest={() => setBest({})}
+        onBack={() => setPhase('home')}
+      />
+    )
+  }
+
+  return (
+    <main className="shell">
+      <header className="masthead">
+        <div className="masthead-row">
+          <h1 className="logo">
+            Guess<span>Up</span>
+          </h1>
+          <button className="link-btn" onClick={() => setPhase('settings')}>
+            Settings
+          </button>
+        </div>
+        <p className="tagline">Phone on your forehead. Tilt down when they guess it.</p>
+      </header>
+
+      {loadFailed && <p className="notice">Could not load decks.json, so only the built-in starter deck is available.</p>}
+
+      <section className="grid">
+        {decks.map((d) => (
+          <button key={d.id} className="tile" style={skin(d.color)} onClick={() => openDeck(d)}>
+            <span className="tile-emoji">{d.emoji}</span>
+            <span className="tile-name">{d.name}</span>
+            <span className="tile-meta">
+              {d.words.length} cards
+              {best[d.id] ? ` · best ${best[d.id]}` : ''}
+            </span>
+            {d.custom && (
+              <span
+                className="tile-edit"
+                role="button"
+                tabIndex={0}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setEditing(d)
+                  setPhase('editor')
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.stopPropagation()
+                    setEditing(d)
+                    setPhase('editor')
+                  }
+                }}
+              >
+                Edit
+              </span>
+            )}
+          </button>
+        ))}
+
+        <button
+          className="tile tile-new"
+          onClick={() => {
+            setEditing(null)
+            setPhase('editor')
+          }}
+        >
+          <span className="tile-emoji">＋</span>
+          <span className="tile-name">New deck</span>
+          <span className="tile-meta">Write your own cards</span>
+        </button>
+      </section>
+
+      <footer className="footnote">
+        Works best on a phone, held in landscape. {decks.length} decks loaded.
+      </footer>
+    </main>
+  )
+}
+
+/* ------------------------------------------------------------------ *
+ * Ready
+ * ------------------------------------------------------------------ */
+
+function ReadyScreen(props: {
+  deck: Deck
+  settings: Settings
+  tiltPermission: TiltPermission
+  tiltZ: number | null
+  onEnableTilt: () => void
+  onStart: () => void
+  onBack: () => void
+}) {
+  const { deck, settings, tiltPermission, tiltZ, onEnableTilt, onStart, onBack } = props
+  const tiltLive = settings.tilt && tiltPermission === 'granted' && tiltZ !== null
+  const canAsk = settings.tilt && tiltPermission === 'unknown'
+  const marker = Math.max(-1, Math.min(1, tiltZ ?? 0))
+
+  return (
+    <main className="shell">
+      <button className="link-btn back" onClick={onBack}>
+        ← All decks
+      </button>
+
+      <div className="ready-head" style={skin(deck.color)}>
+        <span className="ready-emoji">{deck.emoji}</span>
+        <h2 className="ready-name">{deck.name}</h2>
+        <p className="ready-desc">{deck.description || `${deck.words.length} cards`}</p>
+      </div>
+
+      <ol className="rules">
+        <li>Hold the phone flat against your forehead, screen facing your friends.</li>
+        <li>They shout clues. They must not say the word itself.</li>
+        <li>
+          Tilt the phone <strong>down</strong> when you guess right, <strong>up</strong> to skip.
+        </li>
+      </ol>
+
+      {tiltLive ? (
+        <div className="tiltmeter">
+          <div className="tiltmeter-track">
+            <span className="tiltmeter-band" />
+            <span className="tiltmeter-dot" style={{ left: `${((marker + 1) / 2) * 100}%` }} />
+          </div>
+          <div className="tiltmeter-labels">
+            <span>Tilt down · got it</span>
+            <span>Hold flat</span>
+            <span>Tilt up · pass</span>
+          </div>
+        </div>
+      ) : (
+        <div className="tiltmeter">
+          <p className="tilt-note">
+            {canAsk
+              ? 'Turn on motion access to play with tilt. Otherwise, tap the bottom of the screen for a hit and the top to pass.'
+              : 'No tilt on this device. Tap the bottom of the screen for a hit, the top to pass. Arrow keys work too.'}
+          </p>
+          {canAsk && (
+            <button className="btn btn-quiet" onClick={onEnableTilt}>
+              Allow motion access
+            </button>
+          )}
+        </div>
+      )}
+
+      <button className="btn btn-big" style={skin(deck.color)} onClick={onStart}>
+        Start {settings.seconds}s round
+      </button>
+    </main>
+  )
+}
+
+/* ------------------------------------------------------------------ *
+ * Results
+ * ------------------------------------------------------------------ */
+
+function ResultsScreen(props: {
+  deck: Deck
+  results: Result[]
+  best: number
+  onToggle: (index: number) => void
+  onAgain: () => void
+  onHome: () => void
+}) {
+  const { deck, results, best, onToggle, onAgain, onHome } = props
+  const score = results.filter((r) => r.got).length
+
+  return (
+    <main className="shell">
+      <div className="score-head" style={skin(deck.color)}>
+        <span className="score-value">{score}</span>
+        <span className="score-label">{score === 1 ? 'card' : 'cards'} guessed</span>
+        {best > score && <span className="score-best">Your best on {deck.name} is {best}</span>}
+      </div>
+
+      {results.length === 0 ? (
+        <p className="notice">No cards played. Tilt a little further next time - the phone needs to swing about 40° past vertical.</p>
+      ) : (
+        <ul className="review">
+          {results.map((item, i) => (
+            <li key={`${item.word}-${i}`}>
+              <button className={`review-row${item.got ? ' hit' : ''}`} onClick={() => onToggle(i)}>
+                <span className="review-mark">{item.got ? '✓' : '✕'}</span>
+                <span className="review-word">{item.word}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {results.length > 0 && <p className="hint">Tap any card to change the call.</p>}
+
+      <div className="row">
+        <button className="btn btn-big" style={skin(deck.color)} onClick={onAgain}>
+          Play again
+        </button>
+        <button className="btn btn-quiet" onClick={onHome}>
+          All decks
+        </button>
+      </div>
+    </main>
+  )
+}
+
+/* ------------------------------------------------------------------ *
+ * Editor
+ * ------------------------------------------------------------------ */
+
+function EditorScreen(props: {
+  deck: Deck | null
+  onSave: (deck: Deck) => void
+  onDelete?: () => void
+  onCancel: () => void
+}) {
+  const { deck, onSave, onDelete, onCancel } = props
+  const [name, setName] = useState(deck?.name ?? '')
+  const [emoji, setEmoji] = useState(deck?.emoji ?? '🃏')
+  const [color, setColor] = useState(deck?.color ?? SWATCHES[6])
+  const [description, setDescription] = useState(deck?.description ?? '')
+  const [text, setText] = useState((deck?.words ?? []).join('\n'))
+  const [error, setError] = useState('')
+
+  const words = text
+    .split('\n')
+    .map((w) => w.trim())
+    .filter(Boolean)
+
+  const submit = () => {
+    if (!name.trim()) {
+      setError('Give the deck a name.')
+      return
+    }
+    if (words.length < 4) {
+      setError('Add at least four cards, one per line.')
+      return
+    }
+    onSave({
+      id: deck?.id ?? `${slug(name)}-${Date.now().toString(36)}`,
+      name: name.trim(),
+      emoji: emoji.trim() || '🃏',
+      color,
+      description: description.trim(),
+      words,
+      custom: true,
+    })
+  }
+
+  const exportOne = () =>
+    downloadJSON(`${slug(name || 'deck')}.json`, {
+      decks: [{ id: deck?.id ?? slug(name), name, emoji, color, description, words }],
+    })
+
+  return (
+    <main className="shell">
+      <button className="link-btn back" onClick={onCancel}>
+        ← Cancel
+      </button>
+      <h2 className="section-title">{deck ? 'Edit deck' : 'New deck'}</h2>
+
+      <label className="field">
+        <span>Deck name</span>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Office in-jokes" maxLength={28} />
+      </label>
+
+      <div className="field-row">
+        <label className="field field-narrow">
+          <span>Emoji</span>
+          <input value={emoji} onChange={(e) => setEmoji(e.target.value)} maxLength={4} />
+        </label>
+        <label className="field">
+          <span>One-line description</span>
+          <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional" maxLength={48} />
+        </label>
+      </div>
+
+      <div className="field">
+        <span>Colour</span>
+        <div className="swatches">
+          {SWATCHES.map((hex) => (
+            <button
+              key={hex}
+              className={`swatch${hex === color ? ' on' : ''}`}
+              style={{ background: hex }}
+              onClick={() => setColor(hex)}
+              aria-label={`Use colour ${hex}`}
+            />
+          ))}
+        </div>
+      </div>
+
+      <label className="field">
+        <span>Cards · one per line · {words.length} so far</span>
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={10}
+          placeholder={'Monday standup\nThe broken coffee machine\nDeploy on a Friday'}
+        />
+      </label>
+
+      {error && <p className="notice error">{error}</p>}
+
+      <div className="row">
+        <button className="btn btn-big" style={skin(color)} onClick={submit}>
+          Save deck
+        </button>
+        {words.length > 0 && (
+          <button className="btn btn-quiet" onClick={exportOne}>
+            Download as JSON
+          </button>
+        )}
+        {onDelete && (
+          <button className="btn btn-danger" onClick={onDelete}>
+            Delete
+          </button>
+        )}
+      </div>
+      <p className="hint">
+        Saved decks live in this browser. Download the JSON and paste it into <code>public/decks.json</code> to ship it to
+        everyone.
+      </p>
+    </main>
+  )
+}
+
+/* ------------------------------------------------------------------ *
+ * Settings
+ * ------------------------------------------------------------------ */
+
+function SettingsScreen(props: {
+  settings: Settings
+  tiltPermission: TiltPermission
+  decks: Deck[]
+  custom: Deck[]
+  onChange: (patch: Partial<Settings>) => void
+  onEnableTilt: () => void
+  onImport: (decks: Deck[]) => void
+  onClearBest: () => void
+  onBack: () => void
+}) {
+  const { settings, tiltPermission, decks, custom, onChange, onEnableTilt, onImport, onClearBest, onBack } = props
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [message, setMessage] = useState('')
+
+  const handleFile = async (file: File) => {
+    try {
+      const parsed = normaliseDecks(JSON.parse(await file.text())).map((d) => ({ ...d, custom: true }))
+      if (!parsed.length) {
+        setMessage('That file has no usable decks.')
+        return
+      }
+      onImport(parsed)
+      setMessage(`Added ${parsed.length} deck${parsed.length === 1 ? '' : 's'}.`)
+    } catch {
+      setMessage('That file is not valid deck JSON.')
+    }
+  }
+
+  return (
+    <main className="shell">
+      <button className="link-btn back" onClick={onBack}>
+        ← All decks
+      </button>
+      <h2 className="section-title">Settings</h2>
+
+      <div className="field">
+        <span>Round length</span>
+        <div className="choices">
+          {[30, 60, 90, 120].map((value) => (
+            <button
+              key={value}
+              className={`choice${settings.seconds === value ? ' on' : ''}`}
+              onClick={() => onChange({ seconds: value })}
+            >
+              {value}s
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <button className="toggle" onClick={() => onChange({ sound: !settings.sound })}>
+        <span>Sound</span>
+        <span className={`pill${settings.sound ? ' on' : ''}`}>{settings.sound ? 'On' : 'Off'}</span>
+      </button>
+
+      <button className="toggle" onClick={() => onChange({ tilt: !settings.tilt })}>
+        <span>Tilt controls</span>
+        <span className={`pill${settings.tilt ? ' on' : ''}`}>{settings.tilt ? 'On' : 'Off'}</span>
+      </button>
+
+      {settings.tilt && tiltPermission === 'unknown' && (
+        <button className="btn btn-quiet" onClick={onEnableTilt}>
+          Allow motion access
+        </button>
+      )}
+      {tiltPermission === 'unsupported' && <p className="hint">This device has no motion sensor, so tap controls are used.</p>}
+
+      <h2 className="section-title">Decks</h2>
+      <div className="row">
+        <button
+          className="btn btn-quiet"
+          onClick={() => downloadJSON('decks.json', { decks: decks.map(({ custom: _c, ...rest }) => rest) })}
+        >
+          Export all decks
+        </button>
+        <button className="btn btn-quiet" onClick={() => fileRef.current?.click()}>
+          Import deck file
+        </button>
+        <button className="btn btn-quiet" onClick={onClearBest}>
+          Reset best scores
+        </button>
+      </div>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="application/json,.json"
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) void handleFile(file)
+          e.target.value = ''
+        }}
+      />
+      {message && <p className="notice">{message}</p>}
+      <p className="hint">
+        {custom.length} deck{custom.length === 1 ? '' : 's'} saved in this browser. Export them, drop the file into{' '}
+        <code>public/decks.json</code>, and push to make them permanent for everyone.
+      </p>
+    </main>
+  )
+}
