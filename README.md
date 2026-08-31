@@ -22,12 +22,12 @@ Hold the phone flat against your forehead facing your friends. Tilt **down** whe
 - **🃏 8 Curated Built-in Decks in `public/decks.json` & `src/decks.ts`**:
   - 🎬 *Movies & Series* (106 cards)
   - 🌟 *Superstars & Icons* (82 cards)
-  - 🛍️ *Brands in Bangladesh* (72 cards)
+  - 🛍️ *Brands* (188 cards)
   - 🦁 *Animals & Wildlife* (47 cards)
   - 🎭 *Act It Out* (43 cards)
   - 🍕 *Food & Drinks* (35 cards)
   - 🌍 *World Landmarks* (26 cards)
-  - 🎉 *Starter Pack* (20 cards)
+  - 🎉 *Combined Pack* (527 cards)
 - **✨ Custom Deck Editor & JSON Export/Import**:
   - Create custom decks in-app with emoji icons and color swatches.
   - Export all decks as a single `.json` file or import deck files anytime.
