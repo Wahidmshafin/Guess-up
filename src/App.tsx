@@ -6,7 +6,8 @@ export type { Deck }
 
 type Phase = 'home' | 'ready' | 'countdown' | 'play' | 'results' | 'editor' | 'settings'
 type Result = { word: string; got: boolean }
-type Settings = { seconds: number; sound: boolean; tilt: boolean }
+type GameMode = 'timed' | 'cards'
+type Settings = { mode: GameMode; seconds: number; cardCount: number; sound: boolean; tilt: boolean }
 type TiltPermission = 'unknown' | 'unsupported' | 'granted' | 'denied'
 
 /* ------------------------------------------------------------------ *
@@ -18,7 +19,7 @@ const KEY_SETTINGS = 'guessup:settings:v1'
 const KEY_BEST = 'guessup:best:v1'
 const KEY_HISTORY = 'guessup:history:v1'
 
-const DEFAULT_SETTINGS: Settings = { seconds: 60, sound: true, tilt: true }
+const DEFAULT_SETTINGS: Settings = { mode: 'timed', seconds: 60, cardCount: 10, sound: true, tilt: true }
 
 const SWATCHES = [
   '#E8453C', '#F0803C', '#F2B705', '#1E9E6A',
@@ -138,39 +139,55 @@ function useOrientation(active: boolean, onZ: (z: number) => void) {
 }
 
 /* ------------------------------------------------------------------ *
- * Small helpers
+ * Small helpers & Cryptographically Secure Randomness
  * ------------------------------------------------------------------ */
+
+function secureRandomInt(maxExclusive: number): number {
+  if (maxExclusive <= 1) return 0
+  if (typeof window !== 'undefined' && window.crypto && window.crypto.getRandomValues) {
+    const array = new Uint32Array(1)
+    const maxRange = 0x100000000 // 2^32
+    const limit = maxRange - (maxRange % maxExclusive)
+    let value = 0
+    do {
+      window.crypto.getRandomValues(array)
+      value = array[0]
+    } while (value >= limit)
+    return value % maxExclusive
+  }
+  return Math.floor(Math.random() * maxExclusive)
+}
 
 function shuffle<T>(items: T[]): T[] {
   const copy = items.slice()
   for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[copy[i], copy[j]] = [copy[j], copy[i]]
+    const j = secureRandomInt(i + 1)
+    const temp = copy[i]
+    copy[i] = copy[j]
+    copy[j] = temp
   }
   return copy
 }
 
 function getCooldownLimit(totalCards: number): number {
-  if (totalCards > 50) {
-    return Math.min(50, Math.max(1, totalCards - 5))
-  }
-  return Math.min(25, Math.max(1, totalCards - 5))
+  // Keep cooldown small (at most 8 cards or 15% of the deck),
+  // ensuring 85%+ of the deck is always in the active, fully-randomized pool.
+  return Math.min(8, Math.floor(totalCards * 0.15))
 }
 
 function buildQueue(words: string[], deckId: string): string[] {
   const historyMap = load<Record<string, string[]>>(KEY_HISTORY, {})
   const rawHistory = historyMap[deckId] ?? []
   const k = getCooldownLimit(words.length)
-  const recentList = rawHistory.slice(-k)
+  const recentList = k > 0 ? rawHistory.slice(-k) : []
   const recentSet = new Set(recentList)
 
-  // Split words into available (not recently seen) vs cooling (in cooldown)
+  // Split words into available (not recently played) vs cooling
   const available = words.filter((w) => !recentSet.has(w))
-  // For cooling words, maintain oldest-first order
   const cooling = recentList.filter((w) => words.includes(w))
 
-  const shuffledAvailable = shuffle(available)
-  return [...shuffledAvailable, ...cooling]
+  // BOTH available and cooling are fully randomized so there are NEVER any deterministic sequences!
+  return [...shuffle(available), ...shuffle(cooling)]
 }
 
 function recordHistory(deckId: string, word: string, totalCards: number) {
@@ -413,6 +430,8 @@ export default function App() {
   queueRef.current = queue
   const indexRef = useRef(index)
   indexRef.current = index
+  const resultsRef = useRef(results)
+  resultsRef.current = results
 
   const decks = useMemo(() => [...builtIn, ...custom], [builtIn, custom])
   const word = queue[index] ?? ''
@@ -503,6 +522,7 @@ export default function App() {
       if (currentDeck) {
         recordHistory(currentDeck.id, current, currentDeck.words.length)
       }
+      const countAfter = resultsRef.current.length + 1
       setResults((r) => [...r, { word: current, got }])
       play(got ? 'correct' : 'pass')
       buzz(got ? 45 : [20, 50, 20])
@@ -511,10 +531,14 @@ export default function App() {
       window.setTimeout(() => {
         setFlash(null)
         flashRef.current = null
-        nextWordRef.current()
+        if (settings.mode === 'cards' && countAfter >= settings.cardCount) {
+          finishRef.current()
+        } else {
+          nextWordRef.current()
+        }
       }, 700)
     },
-    [index, queue, play],
+    [index, queue, play, settings.mode, settings.cardCount],
   )
 
   const answerRef = useRef(answer)
@@ -583,9 +607,9 @@ export default function App() {
     return () => window.clearInterval(id)
   }, [phase, play])
 
-  /* ---- round timer ---- */
+  /* ---- round timer (only for timed mode) ---- */
   useEffect(() => {
-    if (phase !== 'play') return
+    if (phase !== 'play' || settings.mode !== 'timed') return
     const deadline = Date.now() + settings.seconds * 1000
     let shown = settings.seconds
     setTimeLeft(settings.seconds)
@@ -602,7 +626,7 @@ export default function App() {
       }
     }, 100)
     return () => window.clearInterval(id)
-  }, [phase, settings.seconds, play])
+  }, [phase, settings.mode, settings.seconds, play])
 
   /* ---- record best score ---- */
   useEffect(() => {
@@ -714,7 +738,11 @@ export default function App() {
               {word}
             </div>
             <div className="zone zone-bottom">▼ Got it</div>
-            <div className={`clock${timeLeft <= 5 ? ' urgent' : ''}`}>{timeLeft}</div>
+            {settings.mode === 'cards' ? (
+              <div className="clock">{Math.min(settings.cardCount, results.length + 1)} / {settings.cardCount}</div>
+            ) : (
+              <div className={`clock${timeLeft <= 5 ? ' urgent' : ''}`}>{timeLeft}</div>
+            )}
             <div className="tally">{score}</div>
           </>
         )}
@@ -741,6 +769,7 @@ export default function App() {
       <ResultsScreen
         deck={deck}
         results={results}
+        settings={settings}
         best={best[deck.id] ?? 0}
         onToggle={(i) => setResults((r) => r.map((item, idx) => (idx === i ? { ...item, got: !item.got } : item)))}
         onAgain={() => setPhase('ready')}
@@ -915,7 +944,7 @@ function ReadyScreen(props: {
       )}
 
       <button className="btn btn-big" style={skin(deck.color)} onClick={onStart}>
-        Start {settings.seconds}s round
+        {settings.mode === 'cards' ? `Start ${settings.cardCount} cards round` : `Start ${settings.seconds}s round`}
       </button>
     </main>
   )
@@ -928,19 +957,24 @@ function ReadyScreen(props: {
 function ResultsScreen(props: {
   deck: Deck
   results: Result[]
+  settings: Settings
   best: number
   onToggle: (index: number) => void
   onAgain: () => void
   onHome: () => void
 }) {
-  const { deck, results, best, onToggle, onAgain, onHome } = props
+  const { deck, results, settings, best, onToggle, onAgain, onHome } = props
   const score = results.filter((r) => r.got).length
 
   return (
     <main className="shell">
       <div className="score-head" style={skin(deck.color)}>
         <span className="score-value">{score}</span>
-        <span className="score-label">{score === 1 ? 'card' : 'cards'} guessed</span>
+        <span className="score-label">
+          {settings.mode === 'cards'
+            ? `${score} of ${results.length} guessed`
+            : `${score === 1 ? 'card' : 'cards'} guessed`}
+        </span>
         {best > score && <span className="score-best">Your best on {deck.name} is {best}</span>}
       </div>
 
@@ -1135,19 +1169,54 @@ function SettingsScreen(props: {
       <h2 className="section-title">Settings</h2>
 
       <div className="field">
-        <span>Round length</span>
+        <span>Game mode</span>
         <div className="choices">
-          {[30, 60, 90, 120].map((value) => (
-            <button
-              key={value}
-              className={`choice${settings.seconds === value ? ' on' : ''}`}
-              onClick={() => onChange({ seconds: value })}
-            >
-              {value}s
-            </button>
-          ))}
+          <button
+            className={`choice${settings.mode === 'timed' ? ' on' : ''}`}
+            onClick={() => onChange({ mode: 'timed' })}
+          >
+            ⏱️ Time Limit
+          </button>
+          <button
+            className={`choice${settings.mode === 'cards' ? ' on' : ''}`}
+            onClick={() => onChange({ mode: 'cards' })}
+          >
+            🃏 Card Count
+          </button>
         </div>
       </div>
+
+      {settings.mode === 'timed' ? (
+        <div className="field">
+          <span>Round length</span>
+          <div className="choices">
+            {[30, 60, 90, 120].map((value) => (
+              <button
+                key={value}
+                className={`choice${settings.seconds === value ? ' on' : ''}`}
+                onClick={() => onChange({ seconds: value })}
+              >
+                {value}s
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="field">
+          <span>Cards per round</span>
+          <div className="choices">
+            {[5, 10, 15, 20].map((value) => (
+              <button
+                key={value}
+                className={`choice${settings.cardCount === value ? ' on' : ''}`}
+                onClick={() => onChange({ cardCount: value })}
+              >
+                {value} cards
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <button className="toggle" onClick={() => onChange({ sound: !settings.sound })}>
         <span>Sound</span>
